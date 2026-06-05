@@ -63,14 +63,12 @@ for (const dir of [authDir, dataDir]) {
 // ── DashBig intent helpers ───────────────────────────────────────────────────
 
 const UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const EMAIL_REGEX = /[\w.+%-]+@[\w-]+\.[\w.]+/;
 const METRICS_KEYWORDS = [
-	"mis métricas", "mis metricas", "cómo voy", "como voy",
-	"mi csat", "mi aht", "mi rendimiento", "mis stats",
-	"ver mis métricas", "ver mis metricas", "mis kpis",
-];
-const EMAIL_REGISTRATION_KEYWORDS = [
-	"registrar email", "registrar mi email", "mi email es",
-	"mi correo es", "registrar correo",
+	"métrica", "metrica",
+	"cómo voy", "como voy",
+	"mi csat", "mi aht", "mi rendimiento",
+	"mis stats", "mis kpis", "mis kpi",
 ];
 
 function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
@@ -147,7 +145,7 @@ async function tryAgentMetricsReply(phone: string): Promise<string | null> {
 }
 
 async function tryRegisterEmailReply(phone: string, message: string): Promise<string | null> {
-	const emailMatch = message.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
+	const emailMatch = message.match(EMAIL_REGEX);
 	if (!emailMatch) return null;
 	const email = emailMatch[0].toLowerCase();
 	await saveAgentProfile(phone, email);
@@ -195,8 +193,8 @@ export const inboundHandler = createInboundHandler({
 			const lastUserMsg = [...allMessages].reverse().find((m) => m.role === "user")?.content ?? "";
 			const msgLower = lastUserMsg.toLowerCase();
 
-			// Email registration intent
-			if (EMAIL_REGISTRATION_KEYWORDS.some((kw) => msgLower.includes(kw))) {
+			// Email in message → register agent profile (any mention of an email address)
+			if (EMAIL_REGEX.test(lastUserMsg)) {
 				const conv = await getConversationById(input.conversationId);
 				if (conv) {
 					const reply = await tryRegisterEmailReply(conv.phone, lastUserMsg);
