@@ -185,37 +185,41 @@ export const inboundHandler = createInboundHandler({
 	getActiveSystemPrompt,
 	callDeepSeek: async (input) => {
 		if (isDashBigConfigured()) {
-			// Extract last user message from history + queued
-			const allMessages = [
-				...input.history,
-				...input.queuedMessages.map((m) => ({ role: "user" as const, content: m.text })),
-			];
-			const lastUserMsg = [...allMessages].reverse().find((m) => m.role === "user")?.content ?? "";
-			const msgLower = lastUserMsg.toLowerCase();
+			try {
+				// Extract last user message from history + queued
+				const allMessages = [
+					...input.history,
+					...input.queuedMessages.map((m) => ({ role: "user" as const, content: m.text })),
+				];
+				const lastUserMsg = [...allMessages].reverse().find((m) => m.role === "user")?.content ?? "";
+				const msgLower = lastUserMsg.toLowerCase();
 
-			// Email in message → register agent profile (any mention of an email address)
-			if (EMAIL_REGEX.test(lastUserMsg)) {
+				// Determine if this is a 1-on-1 conversation (not a group)
 				const conv = await getConversationById(input.conversationId);
-				if (conv) {
-					const reply = await tryRegisterEmailReply(conv.phone, lastUserMsg);
+				const isGroup = conv?.jid?.endsWith("@g.us") ?? false;
+
+				if (!isGroup) {
+					// Email in message → register agent profile (any mention of an email address)
+					if (EMAIL_REGEX.test(lastUserMsg) && conv) {
+						const reply = await tryRegisterEmailReply(conv.phone, lastUserMsg);
+						if (reply) return reply;
+					}
+
+					// Agent metrics intent
+					if (METRICS_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
+						const reply = await tryAgentMetricsReply(conv.phone);
+						if (reply) return reply;
+					}
+				}
+
+				// UUID case lookup intent (works in groups too)
+				const uuidMatch = lastUserMsg.match(UUID_REGEX);
+				if (uuidMatch) {
+					const reply = await tryIssueLookupReply(uuidMatch[0]);
 					if (reply) return reply;
 				}
-			}
-
-			// UUID case lookup intent
-			const uuidMatch = lastUserMsg.match(UUID_REGEX);
-			if (uuidMatch) {
-				const reply = await tryIssueLookupReply(uuidMatch[0]);
-				if (reply) return reply;
-			}
-
-			// Agent metrics intent
-			if (METRICS_KEYWORDS.some((kw) => msgLower.includes(kw))) {
-				const conv = await getConversationById(input.conversationId);
-				if (conv) {
-					const reply = await tryAgentMetricsReply(conv.phone);
-					if (reply) return reply;
-				}
+			} catch (err) {
+				console.error("[dashbig] Intent detection error, falling back to DeepSeek:", err);
 			}
 		}
 
