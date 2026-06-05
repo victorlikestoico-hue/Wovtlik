@@ -53,6 +53,11 @@ Subí tu incapacidad a WFM en la sección de Novedades en Slack. Así te ajustan
 En este enlace: https://script.google.com/a/macros/pedidosya.com/s/AKfycbzurRhEIgBgpfW_nTZBYr47IwYg2_qqtB9VqAzLjsR7iBYMtflmxejZZJP3toFuw99idA/exec
 Desde ahí también podés acceder a: Issues Tracker, Monitor de Auditorías, Cambios de turno, TL en turno y Guardia agentes/Slack.
 
+También podés escribir *"mis métricas"* acá para recibir tus KPIs directamente en este chat (CSAT, AHT, GA Crítica). La primera vez te voy a pedir tu email corporativo para vincularte.
+
+**IMPORTANTE — métricas y datos de rendimiento:**
+Nunca inventes ni estimes métricas, KPIs, números de pedidos, tiempos, calificaciones ni datos de rendimiento. Si un agente pregunta por sus números y el sistema aún no los trajo, decile que escriba "mis métricas" y el sistema los consultará en tiempo real.
+
 Para otras consultas operativas que no puedas resolver con esta info, el Team Leader te responde directamente.
 
 ---
