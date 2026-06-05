@@ -98,10 +98,12 @@ function vsObjective(
 ): string {
 	if (value === null || !objectives[objKey]) return "";
 	const { target, condition } = objectives[objKey];
-	const normalizedValue = value <= 1 ? value : value / 100;
+	// Time metrics (seconds) are compared raw; percentage metrics normalized to 0–1
+	const isTime = ["AHT", "FRT", "WUT", "ATT"].includes(objKey);
+	const v = isTime ? value : (value <= 1 ? value : value / 100);
 	const meetsTarget =
-		condition === ">=" ? normalizedValue >= target :
-		condition === "<=" ? normalizedValue <= target : normalizedValue >= target;
+		condition === ">=" ? v >= target :
+		condition === "<=" ? v <= target : v >= target;
 	return meetsTarget ? " ✅" : " ❌";
 }
 
@@ -143,10 +145,10 @@ async function tryAgentMetricsReply(phone: string): Promise<string | null> {
 	const lines = [
 		`📊 *Tus métricas — ${period.start} a ${period.end}*`,
 		lob ? `LOB: ${lob}` : "",
-		`CSAT: ${fmtPct(metrics.csat)}${vsObjective(metrics.csat, "csat", obj)}`,
-		`AHT: ${fmtAht(metrics.aht_seconds)}`,
-		`GA Crítica: ${fmtPct(metrics.ga_critica)}${vsObjective(metrics.ga_critica, "gacrit", obj)}`,
-		metrics.apego !== null ? `Apego: ${fmtPct(metrics.apego)}${vsObjective(metrics.apego, "apego", obj)}` : "",
+		`CSAT: ${fmtPct(metrics.csat)}${vsObjective(metrics.csat, "CSAT", obj)}`,
+		`AHT: ${fmtAht(metrics.aht_seconds)}${vsObjective(metrics.aht_seconds, "AHT", obj)}`,
+		`GA Crítica: ${fmtPct(metrics.ga_critica)}${vsObjective(metrics.ga_critica, "GA_CRIT", obj)}`,
+		metrics.apego !== null ? `Apego: ${fmtPct(metrics.apego)}${vsObjective(metrics.apego, "APEGO_COPILOT", obj)}` : "",
 		`Interacciones: ${metrics.total_interactions}`,
 	].filter(Boolean);
 	return buildDirectReply(lines.join("\n"));
