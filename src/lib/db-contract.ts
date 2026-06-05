@@ -45,6 +45,13 @@ export type AiSuggestionAction =
 	| "update_deal_stage"
 	| "send_reply";
 
+export type AgentProfileRow = {
+	phone: string;
+	email: string;
+	lob: string | null;
+	registered_at: string;
+};
+
 export const DEFAULT_SETTINGS = {
 	bot_on_keyword: "ok.",
 	keyword_match_mode: "exact",
@@ -114,8 +121,16 @@ INSERT INTO settings (key, value) VALUES
   ('whatsapp_freeform_window_hours', '24'::jsonb), ('block_outside_24h_followups', 'true'::jsonb),
   ('chat_ai_provider', '"deepseek"'::jsonb), ('chat_ai_base_url', '"https://api.deepseek.com"'::jsonb), ('chat_ai_api_key', '""'::jsonb), ('chat_ai_model', '"deepseek-v4-pro"'::jsonb),
   ('audio_ai_provider', '"openai"'::jsonb), ('audio_ai_base_url', '"https://api.openai.com/v1"'::jsonb), ('audio_ai_api_key', '""'::jsonb), ('audio_ai_model', '"gpt-4o-transcribe"'::jsonb),
-  ('image_ai_provider', '"openai"'::jsonb), ('image_ai_base_url', '"https://api.openai.com/v1"'::jsonb), ('image_ai_api_key', '""'::jsonb), ('image_ai_model', '"gpt-4o-mini"'::jsonb)
+  ('image_ai_provider', '"openai"'::jsonb), ('image_ai_base_url', '"https://api.openai.com/v1"'::jsonb), ('image_ai_api_key', '""'::jsonb), ('image_ai_model', '"gpt-4o-mini"'::jsonb),
+  ('dashbig_reports_enabled', 'false'::jsonb), ('dashbig_report_hour', '"09:00"'::jsonb),
+  ('dashbig_webapp_url', '""'::jsonb), ('dashbig_api_key', '""'::jsonb)
 ON CONFLICT (key) DO NOTHING;
+CREATE TABLE IF NOT EXISTS agent_profiles (
+  phone TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  lob TEXT,
+  registered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
 CREATE TABLE IF NOT EXISTS conversation_events (
   id SERIAL PRIMARY KEY, conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, event_type TEXT NOT NULL,
   actor_role TEXT CHECK(actor_role IN ('user','assistant','human','system')) NOT NULL, reason TEXT,

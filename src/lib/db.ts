@@ -11,6 +11,7 @@ import {
 	type ConversationEventType,
 	type EventActorRole,
 	type ConversationEventRow,
+	type AgentProfileRow,
 } from "./db-contract.ts";
 import type { ConversationMode } from "../domain/whatsapp-rules.ts";
 import { createPostgresRepository, initializePostgresSchema } from "./postgres-adapter.ts";
@@ -103,6 +104,15 @@ export async function getOrCreateConversation(
 export async function getConversationById(id: number): Promise<ConversationRow | null> {
 	await ensureSchemaInitialized();
 	return repo.getConversationById(id);
+}
+
+export async function getConversationByPhone(phone: string): Promise<ConversationRow | null> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<ConversationRow>(
+		"SELECT * FROM conversations WHERE phone = $1 LIMIT 1",
+		[phone],
+	);
+	return res.rows[0] ?? null;
 }
 
 // 3. insertMessageAndTouchConversation(input)
@@ -749,5 +759,40 @@ export async function updateCrmTask(
 export async function deleteCrmTask(id: number): Promise<void> {
 	await ensureSchemaInitialized();
 	await pool.query("DELETE FROM crm_tasks WHERE id = $1", [id]);
+}
+
+// ── Agent Profiles (phone → email mapping for DashBig integration) ──────────
+
+export async function getAgentProfile(phone: string): Promise<AgentProfileRow | null> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<AgentProfileRow>(
+		"SELECT * FROM agent_profiles WHERE phone = $1 LIMIT 1",
+		[phone],
+	);
+	return res.rows[0] ?? null;
+}
+
+export async function saveAgentProfile(
+	phone: string,
+	email: string,
+	lob: string | null = null,
+): Promise<AgentProfileRow> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<AgentProfileRow>(
+		`INSERT INTO agent_profiles (phone, email, lob, registered_at)
+		 VALUES ($1, $2, $3, NOW())
+		 ON CONFLICT (phone) DO UPDATE SET email = EXCLUDED.email, lob = EXCLUDED.lob
+		 RETURNING *`,
+		[phone, email, lob],
+	);
+	return res.rows[0];
+}
+
+export async function listAgentProfiles(): Promise<AgentProfileRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<AgentProfileRow>(
+		"SELECT * FROM agent_profiles ORDER BY registered_at ASC",
+	);
+	return res.rows;
 }
 

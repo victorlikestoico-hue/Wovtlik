@@ -52,6 +52,7 @@ type Tab =
 	| "prompts"
 	| "automations"
 	| "contacts"
+	| "analytics"
 	| "settings";
 
 interface SidebarProps {
@@ -136,7 +137,7 @@ const staggerVariants = {
 
 const primaryItems: NavItem[] = [
 	{ type: "tab", value: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-	{ type: "placeholder", label: "Reports", icon: FileClock },
+	{ type: "tab", value: "analytics", label: "Analytics", icon: FileClock },
 	{ type: "tab", value: "chats", label: "Conversaciones", icon: MessagesSquare },
 	{ type: "placeholder", label: "Campaigns", icon: Megaphone, badge: "DEV" },
 ];

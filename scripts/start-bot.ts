@@ -7,6 +7,7 @@ import {
 	getSoftRestartFlagPath,
 } from "../src/lib/runtime-paths.ts";
 import { startFollowupsCron } from "./followups-cron.ts";
+import { startDashBigReportsCron } from "./dashbig-reports-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -19,6 +20,9 @@ async function main() {
 
 	// Levantamos la tarea programada de follow-ups
 	startFollowupsCron();
+
+	// Reportes automáticos de DashBig por WhatsApp
+	startDashBigReportsCron();
 
 	// Loop de polling para la desconexión / reinicio manual controlado desde el frontend
 	setInterval(async () => {

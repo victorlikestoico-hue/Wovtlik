@@ -43,7 +43,10 @@ import {
 	deleteConversation,
 	enqueueOutbox,
 	listConversations,
+	getAgentProfile,
+	saveAgentProfile,
 } from "../db.ts";
+import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
 
@@ -56,6 +59,105 @@ for (const dir of [authDir, dataDir]) {
 		fs.mkdirSync(dir, { recursive: true });
 	}
 }
+
+// ── DashBig intent helpers ───────────────────────────────────────────────────
+
+const UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const METRICS_KEYWORDS = [
+	"mis métricas", "mis metricas", "cómo voy", "como voy",
+	"mi csat", "mi aht", "mi rendimiento", "mis stats",
+	"ver mis métricas", "ver mis metricas", "mis kpis",
+];
+const EMAIL_REGISTRATION_KEYWORDS = [
+	"registrar email", "registrar mi email", "mi email es",
+	"mi correo es", "registrar correo",
+];
+
+function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
+	return JSON.stringify({
+		response: { part_1: part1, part_2: part2, part_3: part3 },
+		handoff: { required: false, reason: "" },
+	});
+}
+
+function fmtPct(v: number | null): string {
+	if (v === null) return "N/D";
+	const pct = v <= 1 ? v * 100 : v;
+	return `${pct.toFixed(1)}%`;
+}
+
+function fmtAht(seconds: number | null): string {
+	if (!seconds) return "N/D";
+	const m = Math.floor(seconds / 60);
+	const s = Math.round(seconds % 60);
+	return `${m}:${String(s).padStart(2, "0")} min`;
+}
+
+function vsObjective(
+	value: number | null,
+	objKey: string,
+	objectives: Record<string, { target: number; condition: string }>,
+): string {
+	if (value === null || !objectives[objKey]) return "";
+	const { target, condition } = objectives[objKey];
+	const normalizedValue = value <= 1 ? value : value / 100;
+	const meetsTarget =
+		condition === ">=" ? normalizedValue >= target :
+		condition === "<=" ? normalizedValue <= target : normalizedValue >= target;
+	return meetsTarget ? " ✅" : " ❌";
+}
+
+async function tryIssueLookupReply(caseId: string): Promise<string | null> {
+	const result = await lookupCase(caseId);
+	if (!result) return null;
+	const lines = [
+		`🔍 *Caso encontrado*`,
+		`ID: ${caseId.substring(0, 8)}...`,
+		result.agentEmail ? `Agente: ${result.agentEmail}` : "",
+		result.cr3 ? `CR3: ${result.cr3}` : "",
+		result.lob ? `LOB: ${result.lob}` : "",
+		result.fecha ? `Fecha: ${result.fecha.toString().substring(0, 10)}` : "",
+	].filter(Boolean);
+	return buildDirectReply(lines.join("\n"));
+}
+
+async function tryAgentMetricsReply(phone: string): Promise<string | null> {
+	const profile = await getAgentProfile(phone);
+	if (!profile) {
+		return buildDirectReply(
+			"Para ver tus métricas necesito tu email corporativo 📧",
+			'Respondé con: "mi email es tu.nombre@pedidosya.com"',
+		);
+	}
+	const data = await getAgentMetrics(profile.email);
+	if (!data) return buildDirectReply("No encontré datos de métricas para tu usuario en este período 😕");
+
+	const { metrics, objectives, period, lob } = data;
+	const obj = lob && objectives[lob] ? objectives[lob] : {};
+	const lines = [
+		`📊 *Tus métricas — ${period.start} a ${period.end}*`,
+		lob ? `LOB: ${lob}` : "",
+		`CSAT: ${fmtPct(metrics.csat)}${vsObjective(metrics.csat, "csat", obj)}`,
+		`AHT: ${fmtAht(metrics.aht_seconds)}`,
+		`GA Crítica: ${fmtPct(metrics.ga_critica)}${vsObjective(metrics.ga_critica, "gacrit", obj)}`,
+		metrics.apego !== null ? `Apego: ${fmtPct(metrics.apego)}${vsObjective(metrics.apego, "apego", obj)}` : "",
+		`Interacciones: ${metrics.total_interactions}`,
+	].filter(Boolean);
+	return buildDirectReply(lines.join("\n"));
+}
+
+async function tryRegisterEmailReply(phone: string, message: string): Promise<string | null> {
+	const emailMatch = message.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
+	if (!emailMatch) return null;
+	const email = emailMatch[0].toLowerCase();
+	await saveAgentProfile(phone, email);
+	return buildDirectReply(
+		`✅ Email registrado: *${email}*`,
+		'Ahora podés escribir "mis métricas" para ver tus KPIs.',
+	);
+}
+
+// ── Redis and inbound handler setup ─────────────────────────────────────────
 
 // Cliente global de Redis
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
@@ -84,6 +186,41 @@ export const inboundHandler = createInboundHandler({
 	getRecentHistory,
 	getActiveSystemPrompt,
 	callDeepSeek: async (input) => {
+		if (isDashBigConfigured()) {
+			// Extract last user message from history + queued
+			const allMessages = [
+				...input.history,
+				...input.queuedMessages.map((m) => ({ role: "user" as const, content: m.text })),
+			];
+			const lastUserMsg = [...allMessages].reverse().find((m) => m.role === "user")?.content ?? "";
+			const msgLower = lastUserMsg.toLowerCase();
+
+			// Email registration intent
+			if (EMAIL_REGISTRATION_KEYWORDS.some((kw) => msgLower.includes(kw))) {
+				const conv = await getConversationById(input.conversationId);
+				if (conv) {
+					const reply = await tryRegisterEmailReply(conv.phone, lastUserMsg);
+					if (reply) return reply;
+				}
+			}
+
+			// UUID case lookup intent
+			const uuidMatch = lastUserMsg.match(UUID_REGEX);
+			if (uuidMatch) {
+				const reply = await tryIssueLookupReply(uuidMatch[0]);
+				if (reply) return reply;
+			}
+
+			// Agent metrics intent
+			if (METRICS_KEYWORDS.some((kw) => msgLower.includes(kw))) {
+				const conv = await getConversationById(input.conversationId);
+				if (conv) {
+					const reply = await tryAgentMetricsReply(conv.phone);
+					if (reply) return reply;
+				}
+			}
+		}
+
 		const settings = await getSettings();
 		const chatClient = createConfiguredChatClient(settings);
 		const res = await chatClient.generateNormalReply({

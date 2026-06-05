@@ -13,6 +13,7 @@ import AutomationsOverview from "../components/AutomationsOverview.tsx";
 import ContactsOverview from "../components/ContactsOverview.tsx";
 import TasksBoard from "../components/TasksBoard.tsx";
 import Sidebar from "../components/Sidebar.tsx";
+import AnalyticsPanel from "../components/AnalyticsPanel.tsx";
 import {
 	MessagesIcon,
 } from "../components/Icons.tsx";
@@ -25,6 +26,7 @@ type Tab =
 	| "prompts"
 	| "automations"
 	| "contacts"
+	| "analytics"
 	| "settings";
 
 const UI_STATE_STORAGE_KEY = "wopen.ui-state";
@@ -35,6 +37,7 @@ const TABS: readonly Tab[] = [
 	"prompts",
 	"automations",
 	"contacts",
+	"analytics",
 	"settings",
 ];
 
@@ -416,7 +419,9 @@ export default function HomeClient() {
 								/>
 							)}
 
-									{activeTab === "settings" && <SettingsPanel />}
+									{activeTab === "analytics" && <AnalyticsPanel />}
+
+								{activeTab === "settings" && <SettingsPanel />}
 								</>
 							)}
 						</main>
