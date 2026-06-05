@@ -18,8 +18,12 @@ async function callDashBig(
 			if (v) url.searchParams.set(k, v);
 		}
 		const res = await fetch(url.toString(), { signal: AbortSignal.timeout(20_000) });
-		if (!res.ok) return null;
-		return res.json();
+		const text = await res.text();
+		if (!res.ok || text.trimStart().startsWith("<")) {
+			console.error(`[dashbig] action=${action} returned non-JSON (status=${res.status}):`, text.substring(0, 300));
+			return null;
+		}
+		return JSON.parse(text);
 	} catch (err) {
 		console.error(`[dashbig] Error calling action=${action}:`, err);
 		return null;
