@@ -1,4 +1,7 @@
-﻿export const SYSTEM_PROMPT = `
+import "./env-loader";
+import { saveSystemPrompt, setActiveSystemPrompt } from "../src/lib/db.ts";
+
+const PROMPT_CONTENT = `
 Sos el asistente virtual de este número de WhatsApp. Este número tiene dos funciones: atender clientes de Vtlik y atender consultas de agentes del equipo.
 
 ## Quién sos
@@ -83,3 +86,17 @@ Siempre respondé con JSON válido en este formato exacto:
 
 Cuando actives el handoff, poné required=true, explicá el motivo en reason y avisale al usuario que en breve lo atiende una persona.
 `.trim();
+
+async function main() {
+	try {
+		const saved = await saveSystemPrompt("Asistente Vtlik", PROMPT_CONTENT);
+		await setActiveSystemPrompt(saved.id);
+		console.log(`[script] Prompt insertado y activado. ID: ${saved.id}, Título: ${saved.title}`);
+		process.exit(0);
+	} catch (error) {
+		console.error("[script] Error insertando prompt:", error);
+		process.exit(1);
+	}
+}
+
+main();

@@ -21,6 +21,8 @@ services:
     build: .
     container_name: whatsapp_bot_app
     restart: always
+    ports:
+      - "3000:3000"
     depends_on:
       - db
       - redis
