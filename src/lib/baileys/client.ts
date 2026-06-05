@@ -70,6 +70,10 @@ const METRICS_KEYWORDS = [
 	"mi csat", "mi aht", "mi rendimiento",
 	"mis stats", "mis kpis", "mis kpi",
 ];
+const METRICS_LATEST_KEYWORDS = [
+	"ultimo dia", "último dia", "ultimo día", "último día",
+	"ayer", "metricas hoy", "métricas hoy",
+];
 
 function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
 	return JSON.stringify({
@@ -121,35 +125,33 @@ async function tryIssueLookupReply(caseId: string): Promise<string | null> {
 	return buildDirectReply(lines.join("\n"));
 }
 
-async function tryAgentMetricsReply(phone: string): Promise<string | null> {
+async function tryAgentMetricsReply(phone: string, mode: "mtd" | "latest" = "mtd"): Promise<string | null> {
 	const profile = await getAgentProfile(phone);
 	if (!profile) {
 		return buildDirectReply(
 			"Para ver tus métricas necesito tu email corporativo 📧",
-			'Respondé con: "mi email es tu.nombre@pedidosya.com"',
+			'Respondé con tu email corporativo, ej: "luis@pedidosya.com"',
 		);
 	}
-	// Try current month, fall back to previous month if no data yet
-	let data = await getAgentMetrics(profile.email);
-	if (!data) {
-		const now = new Date();
-		const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-		const prevStart = prevMonth.toISOString().slice(0, 7) + "-01";
-		const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10);
-		data = await getAgentMetrics(profile.email, prevStart, prevEnd);
-	}
-	if (!data) return buildDirectReply("No encontré datos de métricas para tu usuario 😕", "Verificá que tu email esté correcto o que haya datos en BigQuery para este período.");
+
+	const data = await getAgentMetrics(profile.email, mode);
+	if (!data) return buildDirectReply(
+		"No encontré datos de métricas para tu usuario 😕",
+		"Verificá que tu email sea el correcto o contactá al TL.",
+	);
 
 	const { metrics, objectives, period, lob } = data;
 	const obj = lob && objectives[lob] ? objectives[lob] : {};
+	const modeLabel = mode === "latest" ? `📅 Último día: ${period.end}` : `📊 Acumulado: ${period.start} → ${period.end}`;
 	const lines = [
-		`📊 *Tus métricas — ${period.start} a ${period.end}*`,
-		lob ? `LOB: ${lob}` : "",
+		`*Tus métricas* ${lob ? `· ${lob}` : ""}`,
+		modeLabel,
 		`CSAT: ${fmtPct(metrics.csat)}${vsObjective(metrics.csat, "CSAT", obj)}`,
 		`AHT: ${fmtAht(metrics.aht_seconds)}${vsObjective(metrics.aht_seconds, "AHT", obj)}`,
 		`GA Crítica: ${fmtPct(metrics.ga_critica)}${vsObjective(metrics.ga_critica, "GA_CRIT", obj)}`,
 		metrics.apego !== null ? `Apego: ${fmtPct(metrics.apego)}${vsObjective(metrics.apego, "APEGO_COPILOT", obj)}` : "",
 		`Interacciones: ${metrics.total_interactions}`,
+		`\n_Para ver el último día: "ultimo dia"_`,
 	].filter(Boolean);
 	return buildDirectReply(lines.join("\n"));
 }
@@ -216,8 +218,10 @@ export const inboundHandler = createInboundHandler({
 					}
 
 					// Agent metrics intent
-					if (METRICS_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
-						const reply = await tryAgentMetricsReply(conv.phone);
+					const wantsLatest = METRICS_LATEST_KEYWORDS.some((kw) => msgLower.includes(kw));
+					const wantsMtd = METRICS_KEYWORDS.some((kw) => msgLower.includes(kw));
+					if ((wantsLatest || wantsMtd) && conv) {
+						const reply = await tryAgentMetricsReply(conv.phone, wantsLatest ? "latest" : "mtd");
 						if (reply) return reply;
 					}
 				}

@@ -82,10 +82,11 @@ export async function lookupCase(caseId: string): Promise<DashBigCaseResult | nu
 
 export async function getAgentMetrics(
 	agentEmail: string,
+	mode: "mtd" | "latest" = "mtd",
 	startDate?: string,
 	endDate?: string,
 ): Promise<DashBigAgentMetrics | null> {
-	const params: Record<string, string> = { agent: agentEmail };
+	const params: Record<string, string> = { agent: agentEmail, mode };
 	if (startDate) params.startDate = startDate;
 	if (endDate) params.endDate = endDate;
 	const data = (await callDashBig("getAgentMetrics", params)) as any;
