@@ -127,8 +127,16 @@ async function tryAgentMetricsReply(phone: string): Promise<string | null> {
 			'Respondé con: "mi email es tu.nombre@pedidosya.com"',
 		);
 	}
-	const data = await getAgentMetrics(profile.email);
-	if (!data) return buildDirectReply("No encontré datos de métricas para tu usuario en este período 😕");
+	// Try current month, fall back to previous month if no data yet
+	let data = await getAgentMetrics(profile.email);
+	if (!data) {
+		const now = new Date();
+		const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+		const prevStart = prevMonth.toISOString().slice(0, 7) + "-01";
+		const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10);
+		data = await getAgentMetrics(profile.email, prevStart, prevEnd);
+	}
+	if (!data) return buildDirectReply("No encontré datos de métricas para tu usuario 😕", "Verificá que tu email esté correcto o que haya datos en BigQuery para este período.");
 
 	const { metrics, objectives, period, lob } = data;
 	const obj = lob && objectives[lob] ? objectives[lob] : {};
