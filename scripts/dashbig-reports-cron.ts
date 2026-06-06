@@ -24,7 +24,8 @@ function vsObj(
 ): string {
 	if (value === null || !objectives[key]) return "";
 	const { target, condition } = objectives[key];
-	const v = value <= 1 ? value : value / 100;
+	const isTime = ["aht", "frt", "wut", "att"].includes(key);
+	const v = isTime ? value : (value <= 1 ? value : value / 100);
 	const ok = condition === ">=" ? v >= target : condition === "<=" ? v <= target : v >= target;
 	return ok ? " ✅" : " ❌";
 }
@@ -36,7 +37,7 @@ function buildDailyMessage(data: NonNullable<AgentMetrics>): string {
 		`📊 *Reporte diario — ${period.end}*`,
 		lob ? `LOB: ${lob}` : "",
 		`CSAT: ${fmtPct(metrics.csat)}${vsObj(metrics.csat, "csat", obj)}`,
-		`AHT: ${fmtAht(metrics.aht_seconds)}`,
+		`AHT: ${fmtAht(metrics.aht_seconds)}${vsObj(metrics.aht_seconds, "aht", obj)}`,
 		`GA Crítica: ${fmtPct(metrics.ga_critica)}${vsObj(metrics.ga_critica, "gacrit", obj)}`,
 		metrics.apego !== null ? `Apego: ${fmtPct(metrics.apego)}${vsObj(metrics.apego, "apego", obj)}` : "",
 		`Interacciones: ${metrics.total_interactions}`,
@@ -88,7 +89,7 @@ async function runDashBigReportsOnce(): Promise<void> {
 
 	for (const profile of profiles) {
 		try {
-			const data = await getAgentMetrics(profile.email, yDate, yDate);
+			const data = await getAgentMetrics(profile.email, "latest");
 			if (!data) {
 				console.log(`[dashbig-reports] Sin datos para ${profile.email}, omitiendo.`);
 				continue;

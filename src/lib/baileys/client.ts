@@ -103,7 +103,7 @@ function vsObjective(
 	if (value === null || !objectives[objKey]) return "";
 	const { target, condition } = objectives[objKey];
 	// Time metrics (seconds) are compared raw; percentage metrics normalized to 0–1
-	const isTime = ["AHT", "FRT", "WUT", "ATT"].includes(objKey);
+	const isTime = ["aht", "frt", "wut", "att"].includes(objKey);
 	const v = isTime ? value : (value <= 1 ? value : value / 100);
 	const meetsTarget =
 		condition === ">=" ? v >= target :
@@ -146,10 +146,10 @@ async function tryAgentMetricsReply(phone: string, mode: "mtd" | "latest" = "mtd
 	const lines = [
 		`*Tus métricas* ${lob ? `· ${lob}` : ""}`,
 		modeLabel,
-		`CSAT: ${fmtPct(metrics.csat)}${vsObjective(metrics.csat, "CSAT", obj)}`,
-		`AHT: ${fmtAht(metrics.aht_seconds)}${vsObjective(metrics.aht_seconds, "AHT", obj)}`,
-		`GA Crítica: ${fmtPct(metrics.ga_critica)}${vsObjective(metrics.ga_critica, "GA_CRIT", obj)}`,
-		metrics.apego !== null ? `Apego: ${fmtPct(metrics.apego)}${vsObjective(metrics.apego, "APEGO_COPILOT", obj)}` : "",
+		`CSAT: ${fmtPct(metrics.csat)}${vsObjective(metrics.csat, "csat", obj)}`,
+		`AHT: ${fmtAht(metrics.aht_seconds)}${vsObjective(metrics.aht_seconds, "aht", obj)}`,
+		`GA Crítica: ${fmtPct(metrics.ga_critica)}${vsObjective(metrics.ga_critica, "gacrit", obj)}`,
+		metrics.apego !== null ? `Apego: ${fmtPct(metrics.apego)}${vsObjective(metrics.apego, "apego", obj)}` : "",
 		`Interacciones: ${metrics.total_interactions}`,
 		`\n_Para ver el último día: "ultimo dia"_`,
 	].filter(Boolean);
@@ -196,45 +196,43 @@ export const inboundHandler = createInboundHandler({
 	getRecentHistory,
 	getActiveSystemPrompt,
 	callDeepSeek: async (input) => {
-		if (isDashBigConfigured()) {
-			try {
-				// Extract last user message from history + queued
-				const allMessages = [
-					...input.history,
-					...input.queuedMessages.map((m) => ({ role: "user" as const, content: m.text })),
-				];
-				const lastUserMsg = [...allMessages].reverse().find((m) => m.role === "user")?.content ?? "";
-				const msgLower = lastUserMsg.toLowerCase();
+		try {
+			// Extract last user message from history + queued
+			const allMessages = [
+				...input.history,
+				...input.queuedMessages.map((m) => ({ role: "user" as const, content: m.text })),
+			];
+			const lastUserMsg = [...allMessages].reverse().find((m) => m.role === "user")?.content ?? "";
+			const msgLower = lastUserMsg.toLowerCase();
 
-				// Determine if this is a 1-on-1 conversation (not a group)
-				const conv = await getConversationById(input.conversationId);
-				const isGroup = conv?.jid?.endsWith("@g.us") ?? false;
+			// Determine if this is a 1-on-1 conversation (not a group)
+			const conv = await getConversationById(input.conversationId);
+			const isGroup = conv?.jid?.endsWith("@g.us") ?? false;
 
-				if (!isGroup) {
-					// Email in message → register agent profile (any mention of an email address)
-					if (EMAIL_REGEX.test(lastUserMsg) && conv) {
-						const reply = await tryRegisterEmailReply(conv.phone, lastUserMsg);
-						if (reply) return reply;
-					}
-
-					// Agent metrics intent
-					const wantsLatest = METRICS_LATEST_KEYWORDS.some((kw) => msgLower.includes(kw));
-					const wantsMtd = METRICS_KEYWORDS.some((kw) => msgLower.includes(kw));
-					if ((wantsLatest || wantsMtd) && conv) {
-						const reply = await tryAgentMetricsReply(conv.phone, wantsLatest ? "latest" : "mtd");
-						if (reply) return reply;
-					}
-				}
-
-				// UUID case lookup intent (works in groups too)
-				const uuidMatch = lastUserMsg.match(UUID_REGEX);
-				if (uuidMatch) {
-					const reply = await tryIssueLookupReply(uuidMatch[0]);
+			if (!isGroup) {
+				// Email registration always works regardless of BigQuery config
+				if (EMAIL_REGEX.test(lastUserMsg) && conv) {
+					const reply = await tryRegisterEmailReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
 				}
-			} catch (err) {
-				console.error("[dashbig] Intent detection error, falling back to DeepSeek:", err);
+
+				// Agent metrics intent (BigQuery required)
+				const wantsLatest = METRICS_LATEST_KEYWORDS.some((kw) => msgLower.includes(kw));
+				const wantsMtd = METRICS_KEYWORDS.some((kw) => msgLower.includes(kw));
+				if ((wantsLatest || wantsMtd) && conv) {
+					const reply = await tryAgentMetricsReply(conv.phone, wantsLatest ? "latest" : "mtd");
+					if (reply) return reply;
+				}
 			}
+
+			// UUID case lookup (BigQuery required, works in groups too)
+			const uuidMatch = lastUserMsg.match(UUID_REGEX);
+			if (uuidMatch) {
+				const reply = await tryIssueLookupReply(uuidMatch[0]);
+				if (reply) return reply;
+			}
+		} catch (err) {
+			console.error("[dashbig] Intent detection error, falling back to DeepSeek:", err);
 		}
 
 		const settings = await getSettings();
