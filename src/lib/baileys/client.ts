@@ -651,7 +651,6 @@ export async function startWASocket() {
 		syncFullHistory: false,
 		connectTimeoutMs: 60000,
 		defaultQueryTimeoutMs: 120000,
-		fireInitQueries: false,
 	});
 
 	globalSock = sock;

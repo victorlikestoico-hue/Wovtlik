@@ -182,13 +182,21 @@ function isValidOneToOneNotify(
 	message: WhatsAppMessage,
 ): boolean {
 	const jid = message.key.remoteJid;
-	return (
-		upsert.type === "notify" &&
-		!!jid &&
-		!jid.endsWith("g.us") &&
-		!jid.endsWith("@broadcast") &&
-		(jid.endsWith("@s.whatsapp.net") || jid.endsWith("@lid"))
-	);
+	if (!jid) return false;
+	if (jid.endsWith("g.us") || jid.endsWith("@broadcast")) return false;
+	if (!jid.endsWith("@s.whatsapp.net") && !jid.endsWith("@lid")) return false;
+	// "notify" = mensaje en tiempo real; "append" = mensajes pendientes entregados al reconectar
+	if (upsert.type !== "notify" && upsert.type !== "append") return false;
+	// Para "append" solo procesar mensajes recientes (≤ 5 minutos) para evitar reenvíos de historial viejo
+	if (upsert.type === "append") {
+		const raw = message.messageTimestamp;
+		if (!raw) return false;
+		const tsMs = typeof raw === "number"
+			? (raw > 10_000_000_000 ? raw : raw * 1000)
+			: raw instanceof Date ? raw.getTime() : 0;
+		if (Date.now() - tsMs > 5 * 60 * 1000) return false;
+	}
+	return true;
 }
 
 function canonicalChatJid(message: WhatsAppMessage): string {
