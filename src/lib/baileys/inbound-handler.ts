@@ -1,4 +1,4 @@
-﻿import {
+import {
 	decideOwnerKeywordAction,
 	parseNormalReply,
 	planHandoffActions,
@@ -300,7 +300,7 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 		const phone = phoneFromJid(chatJid);
 		const beforeConversation = await deps.repo.getOrCreateConversation({
 			phone,
-			jid: message.key.remoteJid,
+			jid: chatJid,
 			name: fromMe ? null : (message.pushName ?? null),
 		});
 		if (
