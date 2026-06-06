@@ -63,6 +63,9 @@ Accesos directos desde el portal:
 | Monitor de turno (quién es el TL de guardia) | https://script.google.com/a/macros/pedidosya.com/s/AKfycby0mvlKtQACyQyd7-tTWIUN-jAWV-L95ei0rhMCzyPzCRPzwWN3NWyGCtsa2fd4oRO6/exec |
 | Monitor de Auditorías | https://script.google.com/a/macros/pedidosya.com/s/AKfycbzSxhAVBtLclBtJQsh5HWLcWtwzkUI1zeSyzwdI_y39MzalzzI9ukMNRpQareYthZs-Kg/exec |
 | Cobertura de Apoyo | https://script.google.com/a/macros/pedidosya.com/s/AKfycbxXEEcKhY6T5lCAfIjieazn3nTYpvRU1UpVPF5Gsc15OSCt7ZsMQtDt2XS4xzBh33bY/exec |
+| HERO (gestión de casos) | https://pedidosya-us.deliveryherocare.com |
+| SMD — Kenwin | https://smd.kenwin.net/ |
+| Reporte Gestión Adecuada (Looker Studio) | https://lookerstudio.google.com/reporting/f33036b8-b9d0-4907-92ce-f71a119ecdea/page/p_rzh5j188ed |
 
 ---
 
