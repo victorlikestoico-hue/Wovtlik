@@ -592,17 +592,14 @@ async function refreshAllProfilePictures() {
 			
 			if (shouldRefresh) {
 				try {
-					console.log(`[bot] Consultando foto de perfil de ${jid} a WhatsApp...`);
 					const url = await globalSock.profilePictureUrl(jid, "image");
 					await updateConversation(convo.id, {
 						profile_picture_url: url || null,
 						profile_picture_fetched_at: now,
 					});
-					// Delay para no sobrecargar el socket
 					await new Promise((resolve) => setTimeout(resolve, 1000));
-				} catch (err: any) {
-					console.log(`[bot] No se pudo obtener foto de perfil para ${jid}: ${err.message || err}`);
-					// Guardamos la fecha de intento para no volver a intentar hasta dentro de 24h
+				} catch {
+					// not-authorized o item-not-found son esperados según privacidad del contacto
 					await updateConversation(convo.id, {
 						profile_picture_fetched_at: now,
 					});
