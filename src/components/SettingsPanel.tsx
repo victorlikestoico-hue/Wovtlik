@@ -509,6 +509,47 @@ export default function SettingsPanel() {
 					</div>
 				</div>
 
+				{/* Grupo: Programaciones de Turnos */}
+				<div className="bg-surface/80 border border-outline-variant/20 p-5 rounded-2xl space-y-4">
+					<h3 className="text-xs font-bold text-on-surface uppercase tracking-wider flex items-center gap-2">
+						<span>📅</span> Programaciones de Turnos
+					</h3>
+					<p className="text-[9px] text-on-surface-variant/80">
+						IDs de los Google Sheets con las planillas de turnos. Se actualizan cada semana. El agente puede escribir "mis turnos" en WhatsApp para consultarlos.
+					</p>
+					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="programacion_1_id" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
+								Programación 1 — ID del Spreadsheet
+							</label>
+							<input
+								id="programacion_1_id"
+								type="text"
+								value={settings.programacion_1_id || ""}
+								onChange={(e) => handleChange("programacion_1_id", e.target.value)}
+								placeholder="1NrZfcE5z0mfg_LthrAtf0wlg..."
+								className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all font-mono"
+							/>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="programacion_2_id" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
+								Programación 2 — ID del Spreadsheet
+							</label>
+							<input
+								id="programacion_2_id"
+								type="text"
+								value={settings.programacion_2_id || ""}
+								onChange={(e) => handleChange("programacion_2_id", e.target.value)}
+								placeholder="1UqRuXwkd_NOx59eWX5oteCPR..."
+								className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all font-mono"
+							/>
+						</div>
+					</div>
+					<p className="text-[9px] text-on-surface-variant/60">
+						El ID está en la URL del sheet: docs.google.com/spreadsheets/d/<b>ID_ACÁ</b>/edit
+					</p>
+				</div>
+
 				{/* Grupo 4: Telegram */}
 				<div className="bg-surface/80 border border-outline-variant/20 p-5 rounded-2xl space-y-3">
 					<h3 className="text-xs font-bold text-on-surface uppercase tracking-wider flex items-center gap-2">

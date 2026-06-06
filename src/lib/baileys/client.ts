@@ -47,6 +47,7 @@ import {
 	saveAgentProfile,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
+import { getAgentSchedule } from "../sheets-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
 
@@ -73,6 +74,11 @@ const METRICS_KEYWORDS = [
 const METRICS_LATEST_KEYWORDS = [
 	"ultimo dia", "último dia", "ultimo día", "último día",
 	"ayer", "metricas hoy", "métricas hoy",
+];
+const SCHEDULE_KEYWORDS = [
+	"mis turnos", "mi turno", "mi horario", "cuando trabajo",
+	"cuándo trabajo", "mi programacion", "mi programación",
+	"ver turnos", "ver mi horario",
 ];
 
 function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
@@ -156,6 +162,46 @@ async function tryAgentMetricsReply(phone: string, mode: "mtd" | "latest" = "mtd
 	return buildDirectReply(lines.join("\n"));
 }
 
+async function tryScheduleReply(phone: string): Promise<string | null> {
+	const profile = await getAgentProfile(phone);
+	if (!profile) {
+		return buildDirectReply(
+			"Para ver tus turnos necesito tu email corporativo 📧",
+			'Respondé con tu email, ej: "luis@pedidosya.com"',
+		);
+	}
+
+	const settings = await getSettings();
+	const id1 = (settings.programacion_1_id as string) || "";
+	const id2 = (settings.programacion_2_id as string) || "";
+	const ids  = [id1, id2].filter(Boolean);
+
+	if (!ids.length) {
+		return buildDirectReply("Las programaciones no están configuradas aún. Contactá al TL.");
+	}
+
+	try {
+		const shifts = await getAgentSchedule(profile.email, ids);
+		if (!shifts.length) {
+			return buildDirectReply(
+				"No encontré turnos registrados para tu usuario 😕",
+				"Verificá con el TL que tu email esté en la planilla.",
+			);
+		}
+
+		const lines = [`📅 *Tus turnos*`];
+		for (const s of shifts) {
+			const parts = [s.fecha, s.horario, s.estado].filter(Boolean).join(" · ");
+			const novedad = s.novedades ? ` — ${s.novedades}` : "";
+			lines.push(`${parts}${novedad}`);
+		}
+		return buildDirectReply(lines.join("\n"));
+	} catch (err) {
+		console.error("[schedule] Error:", err);
+		return buildDirectReply("No pude consultar tus turnos en este momento. Intentá de nuevo en unos minutos.");
+	}
+}
+
 async function tryRegisterEmailReply(phone: string, message: string): Promise<string | null> {
 	const emailMatch = message.match(EMAIL_REGEX);
 	if (!emailMatch) return null;
@@ -221,6 +267,12 @@ export const inboundHandler = createInboundHandler({
 				const wantsMtd = METRICS_KEYWORDS.some((kw) => msgLower.includes(kw));
 				if ((wantsLatest || wantsMtd) && conv) {
 					const reply = await tryAgentMetricsReply(conv.phone, wantsLatest ? "latest" : "mtd");
+					if (reply) return reply;
+				}
+
+				// Schedule intent (Google Sheets)
+				if (SCHEDULE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
+					const reply = await tryScheduleReply(conv.phone);
 					if (reply) return reply;
 				}
 			}

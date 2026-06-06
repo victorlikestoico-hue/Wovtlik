@@ -123,7 +123,9 @@ INSERT INTO settings (key, value) VALUES
   ('audio_ai_provider', '"openai"'::jsonb), ('audio_ai_base_url', '"https://api.openai.com/v1"'::jsonb), ('audio_ai_api_key', '""'::jsonb), ('audio_ai_model', '"gpt-4o-transcribe"'::jsonb),
   ('image_ai_provider', '"openai"'::jsonb), ('image_ai_base_url', '"https://api.openai.com/v1"'::jsonb), ('image_ai_api_key', '""'::jsonb), ('image_ai_model', '"gpt-4o-mini"'::jsonb),
   ('dashbig_reports_enabled', 'false'::jsonb), ('dashbig_report_hour', '"09:00"'::jsonb),
-  ('dashbig_webapp_url', '""'::jsonb), ('dashbig_api_key', '""'::jsonb)
+  ('dashbig_webapp_url', '""'::jsonb), ('dashbig_api_key', '""'::jsonb),
+  ('programacion_1_id', '"1NrZfcE5z0mfg_LthrAtf0wlgYbqiBQ_tlF085GElkyc"'::jsonb),
+  ('programacion_2_id', '"1UqRuXwkd_NOx59eWX5oteCPRJqRHNvl894GvZyj-vGo"'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 CREATE TABLE IF NOT EXISTS agent_profiles (
   phone TEXT PRIMARY KEY,
