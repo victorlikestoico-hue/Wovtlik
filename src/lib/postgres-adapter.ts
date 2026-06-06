@@ -1,4 +1,4 @@
-﻿import {
+import {
 	DATABASE_SCHEMA_SQL,
 	DEFAULT_SETTINGS,
 	type ConversationEventRow,
@@ -227,10 +227,21 @@ export function createPostgresRepository(pool: PostgresPool) {
 			const created = await pool.query<ConversationRow>(
 				`INSERT INTO conversations (phone, jid, name)
 				 VALUES ($1, $2, $3)
+				 ON CONFLICT DO NOTHING
 				 RETURNING *`,
 				[input.phone, input.jid ?? null, input.name ?? null],
 			);
-			return created.rows[0];
+			// Si ON CONFLICT DO NOTHING no retornó filas, otra solicitud concurrente
+			// insertó primero — buscamos la fila existente.
+			if (created.rows[0]) return created.rows[0];
+			const fallback = await pool.query<ConversationRow>(
+				`SELECT * FROM conversations
+				 WHERE phone = $1 OR jid = $2
+				 ORDER BY id ASC
+				 LIMIT 1`,
+				[input.phone, input.jid ?? null],
+			);
+			return fallback.rows[0];
 		},
 
 		async getConversationById(id: number): Promise<ConversationRow | null> {
