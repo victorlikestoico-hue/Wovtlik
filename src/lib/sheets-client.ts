@@ -183,19 +183,45 @@ export async function getAgentSchedule(
 	return results;
 }
 
+export type AbsenceEntry = { fecha: string; horario: string };
+
 export type AbsenceClearResult =
 	| { success: true;  fecha: string; horario: string }
-	| { success: false; reason: "no_sa" | "not_found" | "error"; message: string };
+	| { success: false; reason: "no_sa" | "not_found" | "error"; message: string }
+	| { success: false; reason: "multiple"; absences: AbsenceEntry[] };
 
+/**
+ * Clear an "Ausente" entry for an agent.
+ *
+ * - targetDate (YYYY-MM-DD): filter to a specific date; required when the agent
+ *   has absences on more than one day.
+ * - When targetDate is provided and the agent has multiple shifts that day,
+ *   the one whose start time is closest to the current Argentina time is used.
+ * - When targetDate is omitted and only one absence exists across all sheets,
+ *   it is removed immediately.
+ * - When targetDate is omitted and multiple dates have absences, returns
+ *   reason "multiple" with the list so the caller can ask the agent to pick.
+ */
 export async function clearAgentAbsence(
 	agentEmail:     string,
 	spreadsheetIds: string[],
+	targetDate?:    string, // YYYY-MM-DD
 ): Promise<AbsenceClearResult> {
 	if (!SA_EMAIL || !SA_KEY) return { success: false, reason: "no_sa", message: "Service account not configured" };
 
 	const emailNorm = agentEmail.trim().toLowerCase();
-	const today     = todayAR();
 	const nowMin    = currentMinutesAR();
+
+	type Candidate = {
+		sheetId:   string;
+		rowIndex:  number;
+		estadoCol: number;
+		fecha:     string; // raw from sheet
+		horario:   string;
+		fechaNorm: string; // YYYY-MM-DD
+	};
+
+	const all: Candidate[] = [];
 
 	for (const id of spreadsheetIds) {
 		if (!id) continue;
@@ -207,40 +233,70 @@ export async function clearAgentAbsence(
 			const estadoCol  = headers.findIndex(h => /^estado$/i.test(h));
 			if (emailCol < 0 || fechaCol < 0 || estadoCol < 0) continue;
 
-			// Find rows: same agent, same date (today), marked as absent
-			const candidates = rows.filter(({ cells }) => {
+			for (const { rowIndex, cells } of rows) {
 				const rowEmail  = (cells[emailCol]  ?? "").toLowerCase();
-				const rowFecha  = normalizeFecha(cells[fechaCol] ?? "");
 				const rowEstado = (cells[estadoCol] ?? "").toLowerCase();
-				return rowEmail === emailNorm && rowFecha === today && rowEstado.includes("ausente");
-			});
-
-			if (candidates.length === 0) continue;
-
-			// Multiple shifts on same day → pick closest start time to now
-			let target = candidates[0];
-			if (candidates.length > 1 && horarioCol >= 0) {
-				target = candidates.reduce((best, row) => {
-					const parsed    = parseHorario(row.cells[horarioCol] ?? "");
-					const bestParsed = parseHorario(best.cells[horarioCol] ?? "");
-					if (!parsed) return best;
-					if (!bestParsed) return row;
-					return Math.abs(parsed.start - nowMin) < Math.abs(bestParsed.start - nowMin) ? row : best;
+				if (rowEmail !== emailNorm) continue;
+				if (!rowEstado.includes("ausente")) continue;
+				const rawFecha = cells[fechaCol] ?? "";
+				all.push({
+					sheetId:   id,
+					rowIndex,
+					estadoCol,
+					fecha:     rawFecha,
+					horario:   horarioCol >= 0 ? (cells[horarioCol] ?? "") : "",
+					fechaNorm: normalizeFecha(rawFecha),
 				});
 			}
-
-			await updateCell(id, target.rowIndex, estadoCol, "");
-
-			return {
-				success: true,
-				fecha:   target.cells[fechaCol]                      ?? today,
-				horario: horarioCol >= 0 ? (target.cells[horarioCol] ?? "") : "",
-			};
 		} catch (err) {
-			console.error(`[sheets] Error clearing absence in sheet ${id}:`, err);
+			console.error(`[sheets] Error reading sheet ${id}:`, err);
 			return { success: false, reason: "error", message: String(err) };
 		}
 	}
 
-	return { success: false, reason: "not_found", message: "No se encontró ausente para hoy" };
+	if (all.length === 0) {
+		return { success: false, reason: "not_found", message: "No se encontraron ausentes registrados" };
+	}
+
+	// Filter by targetDate if provided
+	let candidates = targetDate
+		? all.filter(c => c.fechaNorm === targetDate)
+		: all;
+
+	if (candidates.length === 0) {
+		return { success: false, reason: "not_found", message: "No se encontró ausente para esa fecha" };
+	}
+
+	// If no date was specified and there are absences on more than one distinct day → ask
+	if (!targetDate) {
+		const uniqueDays = new Set(candidates.map(c => c.fechaNorm));
+		if (uniqueDays.size > 1) {
+			return {
+				success: false,
+				reason:  "multiple",
+				absences: candidates.map(c => ({ fecha: c.fecha, horario: c.horario })),
+			};
+		}
+	}
+
+	// Single date → pick by closest horario start time when there are ties
+	let target = candidates[0];
+	if (candidates.length > 1) {
+		target = candidates.reduce((best, row) => {
+			const parsed     = parseHorario(row.horario);
+			const bestParsed = parseHorario(best.horario);
+			if (!parsed) return best;
+			if (!bestParsed) return row;
+			return Math.abs(parsed.start - nowMin) < Math.abs(bestParsed.start - nowMin) ? row : best;
+		});
+	}
+
+	try {
+		await updateCell(target.sheetId, target.rowIndex, target.estadoCol, "");
+	} catch (err) {
+		console.error(`[sheets] Error clearing absence:`, err);
+		return { success: false, reason: "error", message: String(err) };
+	}
+
+	return { success: true, fecha: target.fecha, horario: target.horario };
 }

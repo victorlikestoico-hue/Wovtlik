@@ -208,7 +208,23 @@ async function tryScheduleReply(phone: string): Promise<string | null> {
 	}
 }
 
-async function tryRemoveAbsenceReply(phone: string): Promise<string | null> {
+/** Parse a date from the message and return YYYY-MM-DD, or undefined if none found */
+function parseDateFromMessage(text: string): string | undefined {
+	// DD/MM/YYYY or DD-MM-YYYY
+	let m = text.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\b/);
+	if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+	// DD/MM or DD-MM (assume current year, Argentina time)
+	m = text.match(/\b(\d{1,2})[\/\-](\d{1,2})\b/);
+	if (m) {
+		const year = new Date(
+			new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }),
+		).getFullYear();
+		return `${year}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+	}
+	return undefined;
+}
+
+async function tryRemoveAbsenceReply(phone: string, message: string): Promise<string | null> {
 	const profile = await getAgentProfile(phone);
 	if (!profile) {
 		return buildDirectReply(
@@ -227,22 +243,43 @@ async function tryRemoveAbsenceReply(phone: string): Promise<string | null> {
 		return buildDirectReply("Las programaciones no están configuradas. Contactá al TL.");
 	}
 
+	const targetDate = parseDateFromMessage(message);
+
 	try {
-		const result = await clearAgentAbsence(profile.email, ids);
+		const result = await clearAgentAbsence(profile.email, ids, targetDate);
+
 		if (result.success) {
 			const detail = [result.fecha, result.horario].filter(Boolean).join(" — ");
 			return buildDirectReply(
-				`✅ Ausente eliminado correctamente`,
+				"✅ Ausente eliminado correctamente",
 				detail ? `Turno: ${detail}` : "",
 				"Si el sistema lo vuelve a marcar, contactá al TL para revisarlo.",
 			);
 		}
+
+		if (result.reason === "multiple") {
+			const lines = ["Tenés ausentes en varias fechas. Indicá cuál querés eliminar:"];
+			const seen = new Set<string>();
+			for (const a of result.absences) {
+				const key = `${a.fecha}|${a.horario}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				lines.push(`• ${[a.fecha, a.horario].filter(Boolean).join(" — ")}`);
+			}
+			lines.push('Escribí: "eliminar ausente DD/MM" con la fecha exacta.');
+			return buildDirectReply(lines.join("\n"));
+		}
+
 		if (result.reason === "not_found") {
+			const fechaStr = targetDate
+				? `para el ${targetDate.split("-").reverse().join("/")}`
+				: "en tu planilla";
 			return buildDirectReply(
-				"No encontré ausente para hoy en tu planilla 🤔",
+				`No encontré ausente ${fechaStr} 🤔`,
 				"Verificá que el email registrado sea el correcto o consultá con el TL.",
 			);
 		}
+
 		return buildDirectReply("No pude procesar tu solicitud en este momento. Intentá de nuevo.");
 	} catch (err) {
 		console.error("[absence] Error:", err);
@@ -326,7 +363,7 @@ export const inboundHandler = createInboundHandler({
 
 				// Absence removal intent (Google Sheets write)
 				if (ABSENCE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
-					const reply = await tryRemoveAbsenceReply(conv.phone);
+					const reply = await tryRemoveAbsenceReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
 				}
 			}
