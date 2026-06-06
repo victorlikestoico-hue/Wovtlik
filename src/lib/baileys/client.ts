@@ -47,7 +47,7 @@ import {
 	saveAgentProfile,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
-import { getAgentSchedule } from "../sheets-client.ts";
+import { getAgentSchedule, clearAgentAbsence } from "../sheets-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
 
@@ -79,6 +79,12 @@ const SCHEDULE_KEYWORDS = [
 	"mis turnos", "mi turno", "mi horario", "cuando trabajo",
 	"cuándo trabajo", "mi programacion", "mi programación",
 	"ver turnos", "ver mi horario",
+];
+const ABSENCE_KEYWORDS = [
+	"eliminar ausente", "eliminar mi ausente", "quitar ausente", "quitar mi ausente",
+	"borrar ausente", "borrar mi ausente", "me marcaron ausente",
+	"me pusieron ausente", "figure ausente", "figuro ausente",
+	"aparezco ausente", "estoy marcado ausente", "saquen mi ausente",
 ];
 
 function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
@@ -202,6 +208,48 @@ async function tryScheduleReply(phone: string): Promise<string | null> {
 	}
 }
 
+async function tryRemoveAbsenceReply(phone: string): Promise<string | null> {
+	const profile = await getAgentProfile(phone);
+	if (!profile) {
+		return buildDirectReply(
+			"Para gestionar tu asistencia necesito tu email corporativo 📧",
+			'Respondé con tu email, ej: "luis@pedidosya.com"',
+		);
+	}
+
+	const settings = await getSettings();
+	const ids = [
+		(settings.programacion_1_id as string) || "",
+		(settings.programacion_2_id as string) || "",
+	].filter(Boolean);
+
+	if (!ids.length) {
+		return buildDirectReply("Las programaciones no están configuradas. Contactá al TL.");
+	}
+
+	try {
+		const result = await clearAgentAbsence(profile.email, ids);
+		if (result.success) {
+			const detail = [result.fecha, result.horario].filter(Boolean).join(" — ");
+			return buildDirectReply(
+				`✅ Ausente eliminado correctamente`,
+				detail ? `Turno: ${detail}` : "",
+				"Si el sistema lo vuelve a marcar, contactá al TL para revisarlo.",
+			);
+		}
+		if (result.reason === "not_found") {
+			return buildDirectReply(
+				"No encontré ausente para hoy en tu planilla 🤔",
+				"Verificá que el email registrado sea el correcto o consultá con el TL.",
+			);
+		}
+		return buildDirectReply("No pude procesar tu solicitud en este momento. Intentá de nuevo.");
+	} catch (err) {
+		console.error("[absence] Error:", err);
+		return buildDirectReply("Ocurrió un error al intentar eliminar el ausente. Intentá de nuevo en unos minutos.");
+	}
+}
+
 async function tryRegisterEmailReply(phone: string, message: string): Promise<string | null> {
 	const emailMatch = message.match(EMAIL_REGEX);
 	if (!emailMatch) return null;
@@ -273,6 +321,12 @@ export const inboundHandler = createInboundHandler({
 				// Schedule intent (Google Sheets)
 				if (SCHEDULE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
 					const reply = await tryScheduleReply(conv.phone);
+					if (reply) return reply;
+				}
+
+				// Absence removal intent (Google Sheets write)
+				if (ABSENCE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
+					const reply = await tryRemoveAbsenceReply(conv.phone);
 					if (reply) return reply;
 				}
 			}
