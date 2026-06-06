@@ -380,8 +380,19 @@ export const inboundHandler = createInboundHandler({
 
 		const settings = await getSettings();
 		const chatClient = createConfiguredChatClient(settings);
+		const colombiaDate = new Date().toLocaleString("es-CO", {
+			timeZone: "America/Bogota",
+			weekday: "long",
+			year: "numeric",
+			month: "long",
+			day: "numeric",
+			hour: "2-digit",
+			minute: "2-digit",
+			hour12: true,
+		});
+		const enrichedSystemPrompt = `[Sistema — Fecha y hora actual en Colombia: ${colombiaDate}]\n\n${input.systemPrompt}`;
 		const res = await chatClient.generateNormalReply({
-			systemPrompt: input.systemPrompt,
+			systemPrompt: enrichedSystemPrompt,
 			history: input.history,
 			queuedMessages: input.queuedMessages,
 		});
