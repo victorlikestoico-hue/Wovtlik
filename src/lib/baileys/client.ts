@@ -36,6 +36,7 @@ import {
 	setSetting,
 	getRecentHistory,
 	getActiveSystemPrompt,
+	getMessageContentByWhatsappId,
 	notifyTelegramHumanNeeded,
 	getPendingOutbox,
 	markOutboxSent,
@@ -648,6 +649,14 @@ export async function startWASocket() {
 		syncFullHistory: false,
 		connectTimeoutMs: 60000,
 		defaultQueryTimeoutMs: 120000,
+		fireInitQueries: false,
+		getMessage: async (key) => {
+			if (key.id) {
+				const content = await getMessageContentByWhatsappId(key.id).catch(() => null);
+				if (content) return { conversation: content };
+			}
+			return undefined;
+		},
 	});
 
 	globalSock = sock;

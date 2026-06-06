@@ -130,6 +130,15 @@ export async function messageExistsByWhatsappId(whatsappMessageId: string): Prom
 	return res.rows.length > 0;
 }
 
+export async function getMessageContentByWhatsappId(whatsappMessageId: string): Promise<string | null> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<{ content: string }>(
+		"SELECT content FROM messages WHERE whatsapp_message_id = $1 LIMIT 1",
+		[whatsappMessageId],
+	);
+	return res.rows[0]?.content ?? null;
+}
+
 // 5. getPendingFollowUps(...)
 export async function getPendingFollowUps(input: FollowUpQueryInput): Promise<ConversationRow[]> {
 	await ensureSchemaInitialized();
