@@ -38,6 +38,36 @@ export default function DashboardHeader({
 	const [prevProfilePicUrl, setPrevProfilePicUrl] = useState(botProfile?.profile_picture_url);
 	const profileStatus = normalizeProfileStatus(botProfile?.status);
 
+	const [whisperEnabled, setWhisperEnabled] = useState<boolean | null>(null);
+	const [whisperLoading, setWhisperLoading] = useState(false);
+
+	useEffect(() => {
+		fetch("/api/monitor-control")
+			.then(r => r.json())
+			.then((d: { enabled: boolean }) => setWhisperEnabled(d.enabled))
+			.catch(() => setWhisperEnabled(false));
+	}, []);
+
+	const handleWhisperToggle = async () => {
+		if (whisperLoading || whisperEnabled === null) return;
+		setWhisperLoading(true);
+		try {
+			const res = await fetch("/api/monitor-control", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ enabled: !whisperEnabled }),
+			});
+			if (res.ok) {
+				const data = await res.json() as { enabled: boolean };
+				setWhisperEnabled(data.enabled);
+			}
+		} catch (err) {
+			console.error("[header] Error toggling whisper monitoring:", err);
+		} finally {
+			setWhisperLoading(false);
+		}
+	};
+
 	if (botProfile?.profile_picture_url !== prevProfilePicUrl) {
 		setPrevProfilePicUrl(botProfile?.profile_picture_url);
 		setBotAvatarError(false);
@@ -164,6 +194,24 @@ export default function DashboardHeader({
 								</span>
 								<span>+{phone}</span>
 							</div>
+
+							{/* Botón Monitoreo Whisper */}
+							{whisperEnabled !== null && (
+								<button
+									type="button"
+									onClick={handleWhisperToggle}
+									disabled={whisperLoading}
+									title={whisperEnabled ? "Desactivar monitoreo de whispers" : "Activar monitoreo de whispers"}
+									aria-label={whisperEnabled ? "Desactivar monitoreo" : "Activar monitoreo"}
+									className={`px-4 py-1 bg-transparent border font-display text-[10px] font-bold uppercase tracking-wider rounded-full transition-all duration-200 active:scale-95 disabled:opacity-50 cursor-pointer ${
+										whisperEnabled
+											? "border-emerald-500 text-emerald-500 hover:bg-emerald-500/10"
+											: "border-outline-variant text-on-surface-variant hover:bg-surface/10"
+									}`}
+								>
+									{whisperLoading ? "..." : whisperEnabled ? "● Monitor ON" : "○ Monitor"}
+								</button>
+							)}
 
 							{/* Botón Desconectar */}
 							<button

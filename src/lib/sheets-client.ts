@@ -361,3 +361,84 @@ export async function queueAgentOffline(
 		return false;
 	}
 }
+
+const MONITOR_CONFIG_TAB = "Config";
+
+/** Lee un valor del tab Config de la planilla del Monitor. */
+export async function getMonitorConfig(key: string, spreadsheetId: string): Promise<string | null> {
+	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return null;
+	try {
+		const token = await getAccessToken();
+		const range = encodeURIComponent(`'${MONITOR_CONFIG_TAB}'!A:B`);
+		const res = await fetch(
+			`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`,
+			{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
+		);
+		if (!res.ok) return null;
+		const data = await res.json() as { values?: string[][] };
+		for (const row of (data.values ?? [])) {
+			if ((row[0] ?? "").trim().toLowerCase() === key.toLowerCase()) {
+				return (row[1] ?? "").trim();
+			}
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+/** Escribe (o crea) un valor en el tab Config de la planilla del Monitor. */
+export async function setMonitorConfig(key: string, value: string, spreadsheetId: string): Promise<boolean> {
+	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return false;
+	try {
+		const token = await getAccessToken();
+
+		// Leer filas existentes para encontrar si la key ya existe
+		const range = encodeURIComponent(`'${MONITOR_CONFIG_TAB}'!A:B`);
+		const readRes = await fetch(
+			`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`,
+			{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
+		);
+
+		let targetRow = -1;
+		if (readRes.ok) {
+			const data = await readRes.json() as { values?: string[][] };
+			const rows = data.values ?? [];
+			for (let i = 0; i < rows.length; i++) {
+				if ((rows[i][0] ?? "").trim().toLowerCase() === key.toLowerCase()) {
+					targetRow = i + 1; // 1-based
+					break;
+				}
+			}
+		}
+
+		if (targetRow > 0) {
+			const updateRange = encodeURIComponent(`'${MONITOR_CONFIG_TAB}'!B${targetRow}`);
+			const res = await fetch(
+				`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${updateRange}?valueInputOption=RAW`,
+				{
+					method:  "PUT",
+					headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+					body:    JSON.stringify({ values: [[value]] }),
+					signal:  AbortSignal.timeout(10_000),
+				},
+			);
+			return res.ok;
+		} else {
+			const appendRange = encodeURIComponent(`'${MONITOR_CONFIG_TAB}'!A:B`);
+			const res = await fetch(
+				`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+				{
+					method:  "POST",
+					headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+					body:    JSON.stringify({ values: [[key, value]] }),
+					signal:  AbortSignal.timeout(10_000),
+				},
+			);
+			return res.ok;
+		}
+	} catch (err) {
+		console.error("[sheets] Error setting monitor config:", err);
+		return false;
+	}
+}
