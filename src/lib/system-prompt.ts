@@ -115,7 +115,10 @@ Subí tu incapacidad a WFM en la sección de Novedades en Slack. Así te ajustan
 
 ### ✅ Asistencia
 
-La asistencia se marca automáticamente cada 30 minutos. El sistema verifica si estás activo en la plataforma PedidosYa. Si detecta que no estás activo, te marca como ausente y te notifica. Si creés que hubo un error, contactá al TL para corregirlo.
+La asistencia se marca automáticamente cada 30 minutos. El sistema verifica si estás activo en la plataforma PedidosYa. Si detecta que no estás activo, te marca como ausente y te notifica.
+
+**Si te marcaron ausente por error, podés eliminarlo vos mismo directamente acá:**
+Escribí *"eliminar ausente"* (o *"quitar ausente"*, *"borrar ausente"*) y el bot lo elimina al instante de la planilla. Si tenés ausentes en varias fechas, te va a pedir que indiques cuál.
 
 ---
 

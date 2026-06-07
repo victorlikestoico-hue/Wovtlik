@@ -1,3 +1,4 @@
+import "./env-loader.ts";
 import { SYSTEM_PROMPT } from "../src/lib/system-prompt.ts";
 import { saveSystemPrompt, setActiveSystemPrompt, pool } from "../src/lib/db.ts";
 

@@ -87,8 +87,12 @@ const ABSENCE_KEYWORDS = [
 	"me pusieron ausente", "figure ausente", "figuro ausente",
 	"aparezco ausente", "estoy marcado ausente", "saquen mi ausente",
 	"quitar ausencia", "quitar la ausencia", "eliminar ausencia", "borrar ausencia",
+	"eliminar mi ausencia", "borrar mi ausencia", "sacar mi ausencia",
+	"eliminar la ausencia", "borrar la ausencia", "sacar la ausencia", "sacar ausencia",
 	"quiten la ausencia", "quiten mi ausencia", "saquen la ausencia", "sacar ausente",
-	"quitar falta", "eliminar falta", "borrar falta", "me marcaron falta"
+	"quitar falta", "eliminar falta", "borrar falta", "me marcaron falta",
+	"sacar mi falta", "borrar mi falta", "eliminar mi falta",
+	"tengo ausente", "me aparece ausente", "me sale ausente",
 ];
 
 function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
