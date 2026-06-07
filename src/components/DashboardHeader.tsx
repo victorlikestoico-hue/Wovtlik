@@ -41,6 +41,35 @@ export default function DashboardHeader({
 	const [whisperEnabled, setWhisperEnabled] = useState<boolean | null>(null);
 	const [whisperLoading, setWhisperLoading] = useState(false);
 
+	const [offlineModalOpen, setOfflineModalOpen] = useState(false);
+	const [offlineEmail, setOfflineEmail] = useState("");
+	const [offlineLoading, setOfflineLoading] = useState(false);
+	const [offlineResult, setOfflineResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+	const handleAgentOffline = async () => {
+		if (!offlineEmail.trim() || offlineLoading) return;
+		setOfflineLoading(true);
+		setOfflineResult(null);
+		try {
+			const res = await fetch("/api/agent-offline", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ email: offlineEmail.trim() }),
+			});
+			const data = await res.json() as { ok: boolean; error?: string };
+			if (data.ok) {
+				setOfflineResult({ ok: true, msg: "✅ Solicitud enviada. El Monitor la procesará en el próximo ciclo (~1 min)." });
+				setOfflineEmail("");
+			} else {
+				setOfflineResult({ ok: false, msg: `❌ Error: ${data.error ?? "desconocido"}` });
+			}
+		} catch {
+			setOfflineResult({ ok: false, msg: "❌ Error de red. Intentá de nuevo." });
+		} finally {
+			setOfflineLoading(false);
+		}
+	};
+
 	useEffect(() => {
 		fetch("/api/monitor-control")
 			.then(r => r.json())
@@ -213,6 +242,16 @@ export default function DashboardHeader({
 								</button>
 							)}
 
+							{/* Botón Poner agente Offline */}
+							<button
+								type="button"
+								onClick={() => { setOfflineModalOpen(true); setOfflineResult(null); }}
+								title="Poner agente fuera de línea manualmente"
+								className="px-4 py-1 bg-transparent border border-amber-500 text-amber-500 hover:bg-amber-500/10 font-display text-[10px] font-bold uppercase tracking-wider rounded-full transition-all duration-200 active:scale-95 cursor-pointer"
+							>
+								↓ Offline
+							</button>
+
 							{/* Botón Desconectar */}
 							<button
 								type="button"
@@ -255,6 +294,59 @@ export default function DashboardHeader({
 				</div>
 
 			</header>
+
+			{/* Modal: Poner agente fuera de línea */}
+			{offlineModalOpen && (
+				<div
+					className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
+					onClick={() => setOfflineModalOpen(false)}
+				>
+					<div
+						className="bg-background border border-outline-variant rounded-2xl p-6 w-full max-w-sm shadow-2xl"
+						onClick={e => e.stopPropagation()}
+					>
+						<h2 className="text-sm font-bold text-on-surface mb-1">Poner agente fuera de línea</h2>
+						<p className="text-[10px] text-on-surface-variant mb-4">
+							Ingresá el email corporativo del agente. El Monitor quitará sus chats activos (&lt;60 min) y lo pondrá en Fuera de línea en el próximo ciclo.
+						</p>
+
+						<input
+							type="email"
+							value={offlineEmail}
+							onChange={e => { setOfflineEmail(e.target.value); setOfflineResult(null); }}
+							onKeyDown={e => e.key === "Enter" && handleAgentOffline()}
+							placeholder="agente@pedidosya.com"
+							className="w-full px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 transition-all font-mono mb-3"
+							disabled={offlineLoading}
+							autoFocus
+						/>
+
+						{offlineResult && (
+							<p className={`text-[10px] mb-3 px-3 py-2 rounded-lg ${offlineResult.ok ? "bg-emerald-500/10 text-emerald-600" : "bg-error/10 text-error"}`}>
+								{offlineResult.msg}
+							</p>
+						)}
+
+						<div className="flex gap-2 justify-end">
+							<button
+								type="button"
+								onClick={() => setOfflineModalOpen(false)}
+								className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider border border-outline-variant text-on-surface-variant rounded-xl hover:bg-surface transition-all"
+							>
+								Cancelar
+							</button>
+							<button
+								type="button"
+								onClick={handleAgentOffline}
+								disabled={offlineLoading || !offlineEmail.trim()}
+								className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider bg-amber-500 text-white rounded-xl hover:bg-amber-600 transition-all disabled:opacity-50 active:scale-95"
+							>
+								{offlineLoading ? "Enviando..." : "Poner Offline"}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 
 			{/* Modal de Perfil y Respuestas Rápidas */}
 			{profileModalOpen && (
