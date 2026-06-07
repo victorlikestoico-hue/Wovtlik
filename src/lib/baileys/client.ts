@@ -48,7 +48,7 @@ import {
 	saveAgentProfile,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
-import { getAgentSchedule, clearAgentAbsence } from "../sheets-client.ts";
+import { getAgentSchedule, clearAgentAbsence, queueAgentOffline } from "../sheets-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
 
@@ -81,6 +81,19 @@ const SCHEDULE_KEYWORDS = [
 	"cuándo trabajo", "mi programacion", "mi programación",
 	"ver turnos", "ver mi horario",
 ];
+const OFFLINE_KEYWORDS = [
+	"inactivame", "inactivarme", "ponme fuera de línea", "ponme fuera de linea",
+	"ponme offline", "ponerme fuera de línea", "ponerme fuera de linea",
+	"cambiarme a fuera de línea", "cambiarme a offline", "ponme en offline",
+	"se me cayó el internet", "se me cayo el internet",
+	"perdí internet", "perdi internet", "se me fue el internet",
+	"sin internet y tengo chat", "tengo chats y sin internet",
+	"caí del sistema", "cai del sistema",
+	"me quedé sin internet", "me quede sin internet",
+	"ponme inactivo", "dejarme fuera de línea", "dejarme fuera de linea",
+	"pasarme a fuera de línea", "pasarme a offline",
+];
+
 const ABSENCE_KEYWORDS = [
 	"eliminar ausente", "eliminar mi ausente", "quitar ausente", "quitar mi ausente",
 	"borrar ausente", "borrar mi ausente", "me marcaron ausente",
@@ -295,6 +308,45 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 	}
 }
 
+async function tryGoOfflineReply(phone: string, message: string): Promise<string | null> {
+	const profile = await getAgentProfile(phone);
+	if (!profile) {
+		return buildDirectReply(
+			"Para gestionar tu estado necesito tu email corporativo 📧",
+			'Respondé con tu email, ej: "luis@pedidosya.com"',
+		);
+	}
+
+	const settings = await getSettings();
+	const spreadsheetId = (settings.offline_queue_sheet_id as string) || "";
+
+	if (!spreadsheetId) {
+		return buildDirectReply(
+			"La función de cambio de estado no está configurada. Contactá al TL.",
+		);
+	}
+
+	const msgLower = message.toLowerCase();
+	const reason = (msgLower.includes("internet") || msgLower.includes("caí") || msgLower.includes("cai"))
+		? "Internet caído — solicitud del agente"
+		: "Solicitud directa del agente";
+
+	try {
+		const queued = await queueAgentOffline(profile.email, reason, spreadsheetId);
+		if (queued) {
+			return buildDirectReply(
+				"✅ Solicitud recibida",
+				"Voy a cambiarte a *Fuera de línea* en los próximos 1-3 minutos.",
+				"Si tenés chats activos esperá a que el sistema procese el cambio.",
+			);
+		}
+		return buildDirectReply("No pude registrar la solicitud en este momento. Intentá de nuevo o contactá al TL.");
+	} catch (err) {
+		console.error("[offline] Error:", err);
+		return buildDirectReply("Ocurrió un error al registrar tu solicitud. Intentá de nuevo en unos minutos.");
+	}
+}
+
 async function tryRegisterEmailReply(phone: string, message: string): Promise<string | null> {
 	const emailMatch = message.match(EMAIL_REGEX);
 	if (!emailMatch) return null;
@@ -366,6 +418,12 @@ export const inboundHandler = createInboundHandler({
 				// Schedule intent (Google Sheets)
 				if (SCHEDULE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
 					const reply = await tryScheduleReply(conv.phone);
+					if (reply) return reply;
+				}
+
+				// Offline request intent (queued via Google Sheets → Monitor)
+				if (OFFLINE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
+					const reply = await tryGoOfflineReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
 				}
 

@@ -120,6 +120,9 @@ La asistencia se marca automáticamente cada 30 minutos. El sistema verifica si 
 **Si te marcaron ausente por error, podés eliminarlo vos mismo directamente acá:**
 Escribí *"eliminar ausente"* (o *"quitar ausente"*, *"borrar ausente"*) y el bot lo elimina al instante de la planilla. Si tenés ausentes en varias fechas, te va a pedir que indiques cuál.
 
+**Si necesitás que te cambien a Fuera de línea:**
+Escribí *"ponme fuera de línea"*, *"inactivame"* o *"se me cayó el internet"* y el sistema procesa el cambio automáticamente en los próximos minutos. También aplica si perdiste internet y tenés chats activos.
+
 ---
 
 ### 🐛 Issues Tracker
