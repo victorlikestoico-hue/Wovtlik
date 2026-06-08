@@ -231,6 +231,24 @@ async function tryScheduleReply(phone: string): Promise<string | null> {
 
 /** Parse a date from the message and return YYYY-MM-DD, or undefined if none found */
 function parseDateFromMessage(text: string): string | undefined {
+	const lower = text.toLowerCase();
+
+	// "hoy" → fecha de hoy en Argentina
+	if (/\bhoy\b/.test(lower)) {
+		return new Date(
+			new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }),
+		).toISOString().slice(0, 10);
+	}
+
+	// "mañana" / "manana" → fecha de mañana en Argentina
+	if (/\bma[nñ]ana\b/.test(lower)) {
+		const d = new Date(
+			new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }),
+		);
+		d.setDate(d.getDate() + 1);
+		return d.toISOString().slice(0, 10);
+	}
+
 	// DD/MM/YYYY or DD-MM-YYYY
 	let m = text.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\b/);
 	if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
