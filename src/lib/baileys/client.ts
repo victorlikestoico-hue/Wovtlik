@@ -413,7 +413,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 			// Es el mismo email — confirmar que ya está registrado
 			return buildDirectReply(
 				`✅ Tu email *${email}* ya está registrado.`,
-				'Podés escribir "mis métricas" para ver tus KPIs.',
+				"Con él podés pedir: 📊 métricas · 📅 turnos · ✏️ eliminar ausencias · 🔴 pasarte a offline.",
 			);
 		}
 		// Intento de cambiar a otro email — bloqueado
@@ -449,33 +449,42 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 		);
 	}
 
+	const capabilities = "📊 métricas · 📅 turnos · ✏️ eliminar ausencias · 🔴 pasarte a offline";
+
 	if (pending === "schedule") {
 		await redisClient.del(pendingIntentKey(phone));
-		// Execute schedule handler directly — profile now exists
 		const scheduleReply = await tryScheduleReply(phone);
-		return scheduleReply ?? buildDirectReply(`✅ Email registrado: *${email}*`, 'Podés pedir tus turnos escribiendo "mis turnos".');
+		return scheduleReply ?? buildDirectReply(
+			`✅ Email registrado: *${email}*`,
+			`Podés pedir: ${capabilities}`,
+		);
 	}
 
 	if (pending === "metrics") {
 		await redisClient.del(pendingIntentKey(phone));
-		// Execute metrics handler directly — profile now exists
 		const metricsReply = await tryAgentMetricsReply(phone, "mtd");
-		return metricsReply ?? buildDirectReply(`✅ Email registrado: *${email}*`, 'Podés pedir tus métricas escribiendo "mis métricas".');
+		return metricsReply ?? buildDirectReply(
+			`✅ Email registrado: *${email}*`,
+			`Podés pedir: ${capabilities}`,
+		);
 	}
 
 	if (pending === "offline") {
 		await redisClient.del(pendingIntentKey(phone));
-		// Can't replay offline without the original message; ask user to repeat the reason
 		return buildDirectReply(
 			`✅ Email registrado: *${email}*`,
-			'Para pasarte a offline respondé con el motivo, ej: "internet caído" o "quiero salir".',
+			`Podés pedir: ${capabilities}`,
+			'Para pasarte a offline ahora respondé con el motivo, ej: "internet caído".',
 		);
 	}
 
-	// No pending intent — generic confirmation
+	if (pending === "absence" || pending === "absence_date") {
+		// Already handled above — this path won't be reached, but kept for safety
+	}
+
 	return buildDirectReply(
 		`✅ Email registrado: *${email}*`,
-		'Podés pedir tus turnos, métricas, gestionar ausencias o pedirme que te pase a offline.',
+		`Podés pedir: ${capabilities}`,
 	);
 }
 
