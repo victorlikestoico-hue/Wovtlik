@@ -111,7 +111,7 @@ const ABSENCE_KEYWORDS = [
 
 // Pending intent system: when any handler finds no profile it saves the intent
 // type so that tryRegisterEmailReply can chain back to the right flow.
-type PendingIntent = "absence" | "absence_date" | "offline" | "schedule" | "metrics";
+type PendingIntent = "absence" | "absence_date" | "offline" | "offline_reason" | "schedule" | "metrics";
 const pendingIntentKey = (phone: string) => `bot:pending_intent:${phone}`;
 const PENDING_INTENT_TTL = 300; // 5 minutes
 
@@ -383,11 +383,12 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 	const msgLower = message.toLowerCase();
 	const reason = (msgLower.includes("internet") || msgLower.includes("caí") || msgLower.includes("cai"))
 		? "Internet caído — solicitud del agente"
-		: "Solicitud directa del agente";
+		: message.trim() || "Solicitud directa del agente";
 
 	try {
 		const queued = await queueAgentOffline(profile.email, reason, spreadsheetId);
 		if (queued) {
+			await redisClient.del(pendingIntentKey(phone));
 			return buildDirectReply(
 				"✅ Solicitud recibida",
 				"Voy a cambiarte a *Fuera de línea* en los próximos 1-3 minutos.",
@@ -443,7 +444,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 			}
 
 			if (pending === "offline") {
-				await redisClient.del(pendingIntentKey(phone));
+				await redisClient.set(pendingIntentKey(phone), "offline_reason", "EX", PENDING_INTENT_TTL);
 				return buildDirectReply(
 					`✅ Tu email *${email}* ya está registrado.`,
 					`Podés pedir: ${capabilities}`,
@@ -510,16 +511,12 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 	}
 
 	if (pending === "offline") {
-		await redisClient.del(pendingIntentKey(phone));
+		await redisClient.set(pendingIntentKey(phone), "offline_reason", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
 			`✅ Email registrado: *${email}*`,
 			`Podés pedir: ${capabilities}`,
 			'Para pasarte a offline ahora respondé con el motivo, ej: "internet caído".',
 		);
-	}
-
-	if (pending === "absence" || pending === "absence_date") {
-		// Already handled above — this path won't be reached, but kept for safety
 	}
 
 	return buildDirectReply(
@@ -614,7 +611,10 @@ export const inboundHandler = createInboundHandler({
 				}
 
 				// Offline request intent (queued via Google Sheets → Monitor)
-				if (OFFLINE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
+				// Also catches multi-turn follow-up where user provides the reason after the bot asked
+				const pendingOffline = conv ? await redisClient.get(pendingIntentKey(conv.phone)) : null;
+				const isOfflineReasonFollowUp = pendingOffline === "offline_reason";
+				if ((OFFLINE_KEYWORDS.some((kw) => msgLower.includes(kw)) || isOfflineReasonFollowUp) && conv) {
 					const reply = await tryGoOfflineReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
 				}
