@@ -47,6 +47,7 @@ ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_score INTEGER CHECK(lead
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_score_reason TEXT;
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_updated_at TIMESTAMP WITH TIME ZONE;
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lead_updated_by TEXT CHECK(lead_updated_by IS NULL OR lead_updated_by IN ('assistant','dashboard'));
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lid_jid TEXT UNIQUE;
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS media_type TEXT CHECK(media_type IN ('text','image','audio','unknown')) NOT NULL DEFAULT 'text';
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS media_url TEXT;
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
@@ -188,13 +189,15 @@ export function createPostgresRepository(pool: PostgresPool) {
 			phone: string;
 			jid?: string | null;
 			name?: string | null;
+			lidJid?: string | null;
 		}): Promise<ConversationRow> {
 			const existing = await pool.query<ConversationRow>(
 				`SELECT * FROM conversations
 				 WHERE phone = $1 OR jid = $2
+				    OR ($3::text IS NOT NULL AND lid_jid = $3)
 				 ORDER BY id ASC
 				 LIMIT 1`,
-				[input.phone, input.jid ?? null],
+				[input.phone, input.jid ?? null, input.lidJid ?? null],
 			);
 			if (existing.rows[0]) {
 				const row = existing.rows[0];
@@ -203,12 +206,14 @@ export function createPostgresRepository(pool: PostgresPool) {
 					!!input.phone && !!input.jid && row.jid === input.jid && row.phone !== input.phone;
 				const shouldUpdateJid = !!input.jid && row.jid !== input.jid;
 				const shouldUpdateName = !!nextName && !row.name?.trim();
-				if (shouldUpdatePhone || shouldUpdateJid || shouldUpdateName) {
+				const shouldUpdateLid = !!input.lidJid && row.lid_jid !== input.lidJid;
+				if (shouldUpdatePhone || shouldUpdateJid || shouldUpdateName || shouldUpdateLid) {
 					const updated = await pool.query<ConversationRow>(
 						`UPDATE conversations
 						 SET phone = CASE WHEN $1::text IS NULL THEN phone ELSE $1::text END,
 						     jid = CASE WHEN $2::text IS NULL THEN jid ELSE $2::text END,
 						     name = CASE WHEN $3::text IS NULL OR NULLIF(TRIM(name), '') IS NOT NULL THEN name ELSE $3::text END,
+						     lid_jid = CASE WHEN $5::text IS NULL THEN lid_jid ELSE $5::text END,
 						     updated_at = NOW()
 						 WHERE id = $4
 						 RETURNING *`,
@@ -217,6 +222,7 @@ export function createPostgresRepository(pool: PostgresPool) {
 							input.jid ?? null,
 							nextName ?? null,
 							row.id,
+							shouldUpdateLid ? input.lidJid : null,
 						],
 					);
 					return updated.rows[0];
@@ -225,11 +231,11 @@ export function createPostgresRepository(pool: PostgresPool) {
 			}
 
 			const created = await pool.query<ConversationRow>(
-				`INSERT INTO conversations (phone, jid, name)
-				 VALUES ($1, $2, $3)
+				`INSERT INTO conversations (phone, jid, name, lid_jid)
+				 VALUES ($1, $2, $3, $4)
 				 ON CONFLICT DO NOTHING
 				 RETURNING *`,
-				[input.phone, input.jid ?? null, input.name ?? null],
+				[input.phone, input.jid ?? null, input.name ?? null, input.lidJid ?? null],
 			);
 			// Si ON CONFLICT DO NOTHING no retornó filas, otra solicitud concurrente
 			// insertó primero — buscamos la fila existente.
@@ -237,9 +243,10 @@ export function createPostgresRepository(pool: PostgresPool) {
 			const fallback = await pool.query<ConversationRow>(
 				`SELECT * FROM conversations
 				 WHERE phone = $1 OR jid = $2
+				    OR ($3::text IS NOT NULL AND lid_jid = $3)
 				 ORDER BY id ASC
 				 LIMIT 1`,
-				[input.phone, input.jid ?? null],
+				[input.phone, input.jid ?? null, input.lidJid ?? null],
 			);
 			return fallback.rows[0];
 		},

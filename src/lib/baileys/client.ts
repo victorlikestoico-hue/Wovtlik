@@ -410,10 +410,50 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 	const existing = await getAgentProfile(phone);
 	if (existing) {
 		if (existing.email.toLowerCase() === email) {
-			// Es el mismo email — confirmar que ya está registrado
+			// Es el mismo email — encadenar al intent pendiente si lo hay, igual que en registro nuevo
+			const pending = (await redisClient.get(pendingIntentKey(phone))) as PendingIntent | null;
+
+			if (pending === "absence" || pending === "absence_date") {
+				await redisClient.set(pendingIntentKey(phone), "absence_date", "EX", PENDING_INTENT_TTL);
+				return buildDirectReply(
+					`✅ Tu email *${email}* ya está registrado.`,
+					"Para eliminar la ausencia necesito la fecha 📅",
+					'Indicá el día/mes/año, ej: "08/06/2026" o simplemente "hoy".',
+				);
+			}
+
+			const capabilities = "📊 métricas · 📅 turnos · ✏️ eliminar ausencias · 🔴 pasarte a offline";
+
+			if (pending === "schedule") {
+				await redisClient.del(pendingIntentKey(phone));
+				const scheduleReply = await tryScheduleReply(phone);
+				return scheduleReply ?? buildDirectReply(
+					`✅ Tu email *${email}* ya está registrado.`,
+					`Podés pedir: ${capabilities}`,
+				);
+			}
+
+			if (pending === "metrics") {
+				await redisClient.del(pendingIntentKey(phone));
+				const metricsReply = await tryAgentMetricsReply(phone, "mtd");
+				return metricsReply ?? buildDirectReply(
+					`✅ Tu email *${email}* ya está registrado.`,
+					`Podés pedir: ${capabilities}`,
+				);
+			}
+
+			if (pending === "offline") {
+				await redisClient.del(pendingIntentKey(phone));
+				return buildDirectReply(
+					`✅ Tu email *${email}* ya está registrado.`,
+					`Podés pedir: ${capabilities}`,
+					'Para pasarte a offline ahora respondé con el motivo, ej: "internet caído".',
+				);
+			}
+
 			return buildDirectReply(
 				`✅ Tu email *${email}* ya está registrado.`,
-				"Con él podés pedir: 📊 métricas · 📅 turnos · ✏️ eliminar ausencias · 🔴 pasarte a offline.",
+				`Con él podés pedir: ${capabilities}.`,
 			);
 		}
 		// Intento de cambiar a otro email — bloqueado
@@ -515,7 +555,7 @@ export const inboundHandler = createInboundHandler({
 	now: () => new Date(),
 	repo: {
 		getOrCreateConversation: (input) =>
-			getOrCreateConversation(input.phone, input.jid, input.name),
+			getOrCreateConversation(input.phone, input.jid, input.name, input.lidJid),
 		getConversationById,
 		insertMessageAndTouchConversation,
 		updateConversation,
@@ -1058,6 +1098,18 @@ export async function startWASocket() {
 
 	// Registro del handler de mensajes entrantes con depuración
 	sock.ev.on("messages.upsert", async (upsert: any) => {
+		// Pre-populate LID→phone map from incoming messages that carry senderPn.
+		// This ensures canonicalChatJid can resolve @lid JIDs even before contacts events fire.
+		for (const msg of upsert.messages || []) {
+			if (msg.key?.remoteJid?.endsWith("@lid") && msg.key?.senderPn && !msg.key?.fromMe) {
+				const lidJid = msg.key.remoteJid as string;
+				const phoneJid = (msg.key.senderPn as string).endsWith("@s.whatsapp.net")
+					? (msg.key.senderPn as string)
+					: `${msg.key.senderPn}@s.whatsapp.net`;
+				lidToPhoneJid.set(lidJid, phoneJid);
+			}
+		}
+
 		console.log(
 			`[bot-debug] messages.upsert recibido. Tipo: ${upsert.type}, Cantidad: ${upsert.messages?.length}`,
 		);
@@ -1140,11 +1192,18 @@ export async function startWASocket() {
 		await Promise.all(contacts.map(async (contact) => {
 			processContactForLid(contact);
 			if (contact.id && !contact.id.endsWith("@g.us")) {
+				// Skip pure @lid contacts — they have no real phone number.
+				// Only process @s.whatsapp.net contacts (real phone JIDs).
+				if (contact.id.endsWith("@lid")) return;
 				const name = contact.name?.trim() || contact.notify?.trim() || contact.verifiedName?.trim();
 				if (name && name !== "WOpen" && name !== "Azokia" && name !== "Azokiallc") {
 					try {
 						const phone = contact.id.replace(/@.*/, "");
-						await getOrCreateConversation(phone, contact.id, name);
+						// If the contact has a .lid field, store it so future @lid messages resolve here
+						const lidJid = contact.lid
+							? (contact.lid.endsWith("@lid") ? contact.lid : `${contact.lid}@lid`)
+							: null;
+						await getOrCreateConversation(phone, contact.id, name, lidJid);
 					} catch (err) {
 						console.error("[bot-error] Falló al procesar contacts.upsert para el JID " + contact.id + ":", err);
 					}
@@ -1157,11 +1216,15 @@ export async function startWASocket() {
 		await Promise.all(contacts.map(async (contact) => {
 			processContactForLid(contact);
 			if (contact.id && !contact.id.endsWith("@g.us")) {
+				if (contact.id.endsWith("@lid")) return;
 				const name = contact.name?.trim() || contact.notify?.trim() || contact.verifiedName?.trim();
 				if (name && name !== "WOpen" && name !== "Azokia" && name !== "Azokiallc") {
 					try {
 						const phone = contact.id.replace(/@.*/, "");
-						await getOrCreateConversation(phone, contact.id, name);
+						const lidJid = contact.lid
+							? (contact.lid.endsWith("@lid") ? contact.lid : `${contact.lid}@lid`)
+							: null;
+						await getOrCreateConversation(phone, contact.id, name, lidJid);
 					} catch (err) {
 						console.error("[bot-error] Falló al procesar contacts.update para el JID " + contact.id + ":", err);
 					}

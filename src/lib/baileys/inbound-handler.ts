@@ -81,6 +81,7 @@ export interface HandlerRepository {
 		phone: string;
 		jid?: string | null;
 		name?: string | null;
+		lidJid?: string | null;
 	}): MaybePromise<ConversationRow>;
 	getConversationById(id: number): MaybePromise<ConversationRow | null>;
 	insertMessageAndTouchConversation(
@@ -315,10 +316,14 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 		}
 
 		const phone = phoneFromJid(chatJid);
+		// When a @lid JID was resolved to a real phone JID, store the mapping so
+		// future @lid messages (with or without senderPn) always find this conversation.
+		const lidJid = rawJid.endsWith("@lid") && chatJid !== rawJid ? rawJid : undefined;
 		const beforeConversation = await deps.repo.getOrCreateConversation({
 			phone,
 			jid: chatJid,
 			name: fromMe ? null : (message.pushName ?? null),
+			lidJid,
 		});
 		if (
 			deps.repo.updateConversation &&

@@ -90,14 +90,15 @@ export async function ensureSchemaInitialized() {
 // (Desactivado para no fallar durante el build de Next.js. Se llama lazily en cada función).
 // ensureSchemaInitialized().catch(() => {});
 
-// 1. getOrCreateConversation(phone, jid?, name?)
+// 1. getOrCreateConversation(phone, jid?, name?, lidJid?)
 export async function getOrCreateConversation(
 	phone: string,
 	jid?: string | null,
 	name?: string | null,
+	lidJid?: string | null,
 ): Promise<ConversationRow> {
 	await ensureSchemaInitialized();
-	return repo.getOrCreateConversation({ phone, jid, name });
+	return repo.getOrCreateConversation({ phone, jid, name, lidJid });
 }
 
 // 2. getConversationById(id)

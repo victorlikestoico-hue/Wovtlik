@@ -354,6 +354,7 @@ export interface ConversationRow {
 	id: number;
 	phone: string;
 	jid: string | null;
+	lid_jid?: string | null;
 	name: string | null;
 	profile_picture_url: string | null;
 	profile_picture_fetched_at: Date | null;
@@ -591,10 +592,13 @@ export function createInMemoryRepository() {
 			phone: string;
 			jid?: string | null;
 			name?: string | null;
+			lidJid?: string | null;
 		}): ConversationRow {
 			const existing = conversations.find(
 				(row) =>
-					row.phone === input.phone || (input.jid && row.jid === input.jid),
+					row.phone === input.phone ||
+					(input.jid && row.jid === input.jid) ||
+					(input.lidJid && row.lid_jid === input.lidJid),
 			);
 			if (existing) {
 				if (
@@ -610,6 +614,10 @@ export function createInMemoryRepository() {
 					existing.jid = input.jid;
 					existing.updated_at = nowDate();
 				}
+				if (input.lidJid && existing.lid_jid !== input.lidJid) {
+					existing.lid_jid = input.lidJid;
+					existing.updated_at = nowDate();
+				}
 				return existing;
 			}
 			const created = nowDate();
@@ -617,6 +625,7 @@ export function createInMemoryRepository() {
 				id: nextConversationId++,
 				phone: input.phone,
 				jid: input.jid ?? null,
+				lid_jid: input.lidJid ?? null,
 				name: input.name ?? null,
 				profile_picture_url: null,
 				profile_picture_fetched_at: null,
