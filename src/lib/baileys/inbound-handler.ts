@@ -287,9 +287,17 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 		if (!isValidOneToOneNotify(upsert, message)) return { status: "ignored" };
 
 		const now = deps.now();
+		const rawJid = message.key.remoteJid as string;
 		const chatJid = canonicalChatJid(message, deps.resolveLid);
 		const whatsappMessageId = message.key.id;
 		const fromMe = message.key.fromMe === true;
+
+		// Bot's own messages sent to a user using the new LID protocol get echoed back
+		// as append events with the @lid JID but no senderPn. We can't resolve the real
+		// phone, so skip them to avoid creating ghost conversations in the DB.
+		if (fromMe && rawJid.endsWith("@lid") && chatJid.endsWith("@lid")) {
+			return { status: "ignored" };
+		}
 		const { mediaType, content: detectedText } = detectMediaTypeAndContent(message);
 		let text = detectedText;
 
