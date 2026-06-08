@@ -93,6 +93,30 @@ const OFFLINE_KEYWORDS = [
 	"me quedé sin internet", "me quede sin internet",
 	"ponme inactivo", "dejarme fuera de línea", "dejarme fuera de linea",
 	"pasarme a fuera de línea", "pasarme a offline",
+	// Variantes de "desconectar"
+	"desconéctame", "desconectame", "me desconecto", "quiero desconectarme",
+	"necesito desconectarme", "me voy a desconectar", "voy a desconectarme",
+	"podés desconectarme", "podes desconectarme", "me podés desconectar", "me podes desconectar",
+	"me puedes desconectar", "desconectarme por favor",
+	"me desconectes", "que me desconectes", "me desconecten", "que me desconecten",
+	"me vas a desconectar", "me podrias desconectar", "podrías desconectarme",
+	// Variantes de "quiero/necesito estar offline"
+	"me voy offline", "me pongo offline", "quiero quedar offline", "quiero estar offline",
+	"necesito estar offline", "necesito quedar offline", "voy a estar offline",
+	"quiero quedar fuera de línea", "quiero estar fuera de línea",
+	"quiero quedar fuera de linea", "quiero estar fuera de linea",
+	"necesito estar fuera de línea", "necesito quedar fuera de línea",
+	// Sácame / salir de línea
+	"sácame de línea", "sacame de linea", "sácame de linea", "sacame de línea",
+	"quiero salir de línea", "quiero salir de linea", "quiero que me pongas offline",
+	"poneme offline", "ponganme offline", "poneme fuera de línea", "poneme fuera de linea",
+	// Inactivo / dejar de atender
+	"ponerme inactivo", "dejarme inactivo", "quedarme inactivo",
+	"no quiero atender", "necesito salir del sistema",
+	// Problemas de conexión genéricos
+	"me quedé sin señal", "me quede sin señal", "perdí la señal", "perdi la señal",
+	"se me cayó la conexión", "se me cayo la conexion", "sin conexión", "sin conexion",
+	"problemas de conexión", "problemas de conexion", "se me fue la señal",
 ];
 
 const ABSENCE_KEYWORDS = [
