@@ -280,6 +280,8 @@ function parseDateFromMessage(text: string): string | undefined {
 async function tryRemoveAbsenceReply(phone: string, message: string): Promise<string | null> {
 	const profile = await getAgentProfile(phone);
 	if (!profile) {
+		// No profile yet — save intent so the registration flow can chain back here
+		await redisClient.set(absencePendingKey(phone), "1", "EX", ABSENCE_PENDING_TTL);
 		return buildDirectReply(
 			"Para gestionar tu asistencia necesito tu email corporativo 📧",
 			'Respondé con tu email, ej: "luis@pedidosya.com"',
@@ -425,6 +427,19 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 
 	// Registro libre — guardar
 	await saveAgentProfile(phone, email);
+
+	// Si había un intent de ausencia pendiente, encadenar el flujo directo
+	const pendingAbsence = await redisClient.get(absencePendingKey(phone));
+	if (pendingAbsence) {
+		// Mantener la clave para que el siguiente mensaje (con fecha) también sea capturado
+		await redisClient.set(absencePendingKey(phone), "1", "EX", ABSENCE_PENDING_TTL);
+		return buildDirectReply(
+			`✅ Email registrado: *${email}*`,
+			"Para eliminar la ausencia necesito la fecha 📅",
+			'Indicá el día/mes/año, ej: "08/06/2026" o simplemente "hoy".',
+		);
+	}
+
 	return buildDirectReply(
 		`✅ Email registrado: *${email}*`,
 		'Ahora podés escribir "mis métricas" para ver tus KPIs.',
@@ -478,10 +493,21 @@ export const inboundHandler = createInboundHandler({
 			const isGroup = conv?.jid?.endsWith("@g.us") ?? false;
 
 			if (!isGroup) {
-				// Email registration always works regardless of BigQuery config
-				if (EMAIL_REGEX.test(lastUserMsg) && conv) {
-					const reply = await tryRegisterEmailReply(conv.phone, lastUserMsg);
-					if (reply) return reply;
+				// Email registration always works regardless of BigQuery config.
+				// Also check queued messages: if the email arrived in the same debounce batch as
+				// another intent (e.g. user sent email then immediately "eliminar ausencia"), save
+				// the profile silently so the intent below finds it in the same turn.
+				if (conv) {
+					if (EMAIL_REGEX.test(lastUserMsg)) {
+						const reply = await tryRegisterEmailReply(conv.phone, lastUserMsg);
+						if (reply) return reply;
+					} else {
+						const batchEmail = input.queuedMessages.find((m) => EMAIL_REGEX.test(m.text));
+						if (batchEmail) {
+							// Register profile without returning — continue to handle lastUserMsg intent
+							await tryRegisterEmailReply(conv.phone, batchEmail.text);
+						}
+					}
 				}
 
 				// Agent metrics intent (BigQuery required)
