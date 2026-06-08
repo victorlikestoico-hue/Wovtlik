@@ -109,6 +109,19 @@ const ABSENCE_KEYWORDS = [
 	"tengo ausente", "me aparece ausente", "me sale ausente",
 ];
 
+// Redis key for pending absence intent (awaiting date from user)
+const absencePendingKey = (phone: string) => `bot:absence_pending:${phone}`;
+const ABSENCE_PENDING_TTL = 300; // 5 minutes
+
+// Detects absence-removal intent even when phrased with gerunds or natural language
+// e.g. "me ayudas eliminando una ausencia", "ayuda eliminando mi ausente"
+function matchesAbsenceIntent(msgLower: string): boolean {
+	if (ABSENCE_KEYWORDS.some((kw) => msgLower.includes(kw))) return true;
+	const hasAbsenceNoun = /\b(ausenci[ao]|ausente|faltas?)\b/.test(msgLower);
+	const hasRemovalVerb = /\b(elimin[a-záéíóúñü]{0,6}|quit[a-záéíóúñü]{0,6}|borr[a-záéíóúñü]{0,6}|sac[a-záéíóúñü]{0,6}|remov[a-záéíóúñü]{0,6})\b/.test(msgLower);
+	return hasAbsenceNoun && hasRemovalVerb;
+}
+
 function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
 	return JSON.stringify({
 		response: { part_1: part1, part_2: part2, part_3: part3 },
@@ -285,6 +298,18 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 
 	const targetDate = parseDateFromMessage(message);
 
+	if (!targetDate) {
+		// No date yet — ask for it and keep the intent alive in Redis
+		await redisClient.set(absencePendingKey(phone), "1", "EX", ABSENCE_PENDING_TTL);
+		return buildDirectReply(
+			"Para eliminar la ausencia necesito la fecha 📅",
+			'Indicá el día/mes/año, ej: "08/06/2026" o simplemente "hoy".',
+		);
+	}
+
+	// Date received — clear pending state
+	await redisClient.del(absencePendingKey(phone));
+
 	try {
 		const result = await clearAgentAbsence(profile.email, ids, targetDate);
 
@@ -307,15 +332,14 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 				lines.push(`• ${[a.fecha, a.horario].filter(Boolean).join(" — ")}`);
 			}
 			lines.push('Escribí: "eliminar ausente DD/MM" con la fecha exacta.');
+			// Keep pending state so next message (with corrected date) is also caught
+			await redisClient.set(absencePendingKey(phone), "1", "EX", ABSENCE_PENDING_TTL);
 			return buildDirectReply(lines.join("\n"));
 		}
 
 		if (result.reason === "not_found") {
-			const fechaStr = targetDate
-				? `para el ${targetDate.split("-").reverse().join("/")}`
-				: "en tu planilla";
 			return buildDirectReply(
-				`No encontré ausente ${fechaStr} 🤔`,
+				`No encontré ausente para el ${targetDate.split("-").reverse().join("/")} 🤔`,
 				"Verificá que el email registrado sea el correcto o consultá con el TL.",
 			);
 		}
@@ -481,7 +505,10 @@ export const inboundHandler = createInboundHandler({
 				}
 
 				// Absence removal intent (Google Sheets write)
-				if (ABSENCE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
+				// Also catches multi-turn follow-ups where user provides the date after the bot asked
+				const hasPendingAbsence = conv && !!(await redisClient.get(absencePendingKey(conv.phone)));
+				const isAbsenceDateFollowUp = hasPendingAbsence && !!parseDateFromMessage(lastUserMsg);
+				if ((matchesAbsenceIntent(msgLower) || isAbsenceDateFollowUp) && conv) {
 					const reply = await tryRemoveAbsenceReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
 				}
