@@ -109,9 +109,15 @@ const ABSENCE_KEYWORDS = [
 	"tengo ausente", "me aparece ausente", "me sale ausente",
 ];
 
-// Redis key for pending absence intent (awaiting date from user)
-const absencePendingKey = (phone: string) => `bot:absence_pending:${phone}`;
-const ABSENCE_PENDING_TTL = 300; // 5 minutes
+// Pending intent system: when any handler finds no profile it saves the intent
+// type so that tryRegisterEmailReply can chain back to the right flow.
+type PendingIntent = "absence" | "absence_date" | "offline" | "schedule" | "metrics";
+const pendingIntentKey = (phone: string) => `bot:pending_intent:${phone}`;
+const PENDING_INTENT_TTL = 300; // 5 minutes
+
+// Legacy alias kept for the absence date follow-up check (multi-turn)
+const absencePendingKey = (phone: string) => pendingIntentKey(phone);
+const ABSENCE_PENDING_TTL = PENDING_INTENT_TTL;
 
 // Detects absence-removal intent even when phrased with gerunds or natural language
 // e.g. "me ayudas eliminando una ausencia", "ayuda eliminando mi ausente"
@@ -175,6 +181,7 @@ async function tryIssueLookupReply(caseId: string): Promise<string | null> {
 async function tryAgentMetricsReply(phone: string, mode: "mtd" | "latest" = "mtd"): Promise<string | null> {
 	const profile = await getAgentProfile(phone);
 	if (!profile) {
+		await redisClient.set(pendingIntentKey(phone), "metrics", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
 			"Para ver tus métricas necesito tu email corporativo 📧",
 			'Respondé con tu email corporativo, ej: "luis@pedidosya.com"',
@@ -206,6 +213,7 @@ async function tryAgentMetricsReply(phone: string, mode: "mtd" | "latest" = "mtd
 async function tryScheduleReply(phone: string): Promise<string | null> {
 	const profile = await getAgentProfile(phone);
 	if (!profile) {
+		await redisClient.set(pendingIntentKey(phone), "schedule", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
 			"Para ver tus turnos necesito tu email corporativo 📧",
 			'Respondé con tu email, ej: "luis@pedidosya.com"',
@@ -281,7 +289,7 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 	const profile = await getAgentProfile(phone);
 	if (!profile) {
 		// No profile yet — save intent so the registration flow can chain back here
-		await redisClient.set(absencePendingKey(phone), "1", "EX", ABSENCE_PENDING_TTL);
+		await redisClient.set(pendingIntentKey(phone), "absence", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
 			"Para gestionar tu asistencia necesito tu email corporativo 📧",
 			'Respondé con tu email, ej: "luis@pedidosya.com"',
@@ -302,7 +310,7 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 
 	if (!targetDate) {
 		// No date yet — ask for it and keep the intent alive in Redis
-		await redisClient.set(absencePendingKey(phone), "1", "EX", ABSENCE_PENDING_TTL);
+		await redisClient.set(pendingIntentKey(phone), "absence_date", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
 			"Para eliminar la ausencia necesito la fecha 📅",
 			'Indicá el día/mes/año, ej: "08/06/2026" o simplemente "hoy".',
@@ -335,7 +343,7 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 			}
 			lines.push('Escribí: "eliminar ausente DD/MM" con la fecha exacta.');
 			// Keep pending state so next message (with corrected date) is also caught
-			await redisClient.set(absencePendingKey(phone), "1", "EX", ABSENCE_PENDING_TTL);
+			await redisClient.set(pendingIntentKey(phone), "absence_date", "EX", PENDING_INTENT_TTL);
 			return buildDirectReply(lines.join("\n"));
 		}
 
@@ -356,6 +364,7 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 async function tryGoOfflineReply(phone: string, message: string): Promise<string | null> {
 	const profile = await getAgentProfile(phone);
 	if (!profile) {
+		await redisClient.set(pendingIntentKey(phone), "offline", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
 			"Para gestionar tu estado necesito tu email corporativo 📧",
 			'Respondé con tu email, ej: "luis@pedidosya.com"',
@@ -428,11 +437,11 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 	// Registro libre — guardar
 	await saveAgentProfile(phone, email);
 
-	// Si había un intent de ausencia pendiente, encadenar el flujo directo
-	const pendingAbsence = await redisClient.get(absencePendingKey(phone));
-	if (pendingAbsence) {
-		// Mantener la clave para que el siguiente mensaje (con fecha) también sea capturado
-		await redisClient.set(absencePendingKey(phone), "1", "EX", ABSENCE_PENDING_TTL);
+	// Encadenar al intent original si había uno pendiente
+	const pending = (await redisClient.get(pendingIntentKey(phone))) as PendingIntent | null;
+
+	if (pending === "absence" || pending === "absence_date") {
+		await redisClient.set(pendingIntentKey(phone), "absence_date", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
 			`✅ Email registrado: *${email}*`,
 			"Para eliminar la ausencia necesito la fecha 📅",
@@ -440,9 +449,33 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 		);
 	}
 
+	if (pending === "schedule") {
+		await redisClient.del(pendingIntentKey(phone));
+		// Execute schedule handler directly — profile now exists
+		const scheduleReply = await tryScheduleReply(phone);
+		return scheduleReply ?? buildDirectReply(`✅ Email registrado: *${email}*`, 'Podés pedir tus turnos escribiendo "mis turnos".');
+	}
+
+	if (pending === "metrics") {
+		await redisClient.del(pendingIntentKey(phone));
+		// Execute metrics handler directly — profile now exists
+		const metricsReply = await tryAgentMetricsReply(phone, "mtd");
+		return metricsReply ?? buildDirectReply(`✅ Email registrado: *${email}*`, 'Podés pedir tus métricas escribiendo "mis métricas".');
+	}
+
+	if (pending === "offline") {
+		await redisClient.del(pendingIntentKey(phone));
+		// Can't replay offline without the original message; ask user to repeat the reason
+		return buildDirectReply(
+			`✅ Email registrado: *${email}*`,
+			'Para pasarte a offline respondé con el motivo, ej: "internet caído" o "quiero salir".',
+		);
+	}
+
+	// No pending intent — generic confirmation
 	return buildDirectReply(
 		`✅ Email registrado: *${email}*`,
-		'Ahora podés escribir "mis métricas" para ver tus KPIs.',
+		'Podés pedir tus turnos, métricas, gestionar ausencias o pedirme que te pase a offline.',
 	);
 }
 
