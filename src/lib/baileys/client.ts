@@ -467,7 +467,11 @@ export const inboundHandler = createInboundHandler({
 			queuedMessages: input.queuedMessages,
 		});
 		if (!res.ok) {
-			throw new Error(res.reason);
+			// No lanzamos — devolvemos un string que parseNormalReply rechazará.
+			// Esto permite que el inbound handler ejecute su path ai_invalid_json,
+			// que detiene el indicador "escribiendo..." y registra el evento en DB.
+			console.warn(`[bot] generateNormalReply falló (${res.reason}); delegando a path ai_invalid_json.`);
+			return `{"_deepseek_error":${JSON.stringify(res.reason)}}`;
 		}
 		return res.rawContent;
 	},
