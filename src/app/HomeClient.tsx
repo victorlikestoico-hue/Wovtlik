@@ -328,6 +328,23 @@ export default function HomeClient() {
 		dataDispatch({ type: "UPDATE_CONVO_DATA", updated });
 	};
 
+	const handleBulkDelete = async () => {
+		const res = await fetch(`/api/conversations/bulk?archived=${showArchived}`, { method: "DELETE" });
+		if (res.ok) {
+			uiDispatch({ type: "SELECT_CONVO", id: null });
+			await loadConversations(showArchived);
+		}
+	};
+
+	const handleBulkModeAll = async (mode: "AI" | "HUMAN") => {
+		await fetch("/api/mode/bulk", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ mode, archived: showArchived }),
+		});
+		await loadConversations(showArchived);
+	};
+
 	return (
 		<ConnectionGate>
 			{(phone, onDisconnect, botProfile, connection) => (
@@ -371,6 +388,8 @@ export default function HomeClient() {
 											onSelectConversation={(id) => uiDispatch({ type: "SELECT_CONVO", id })}
 											showArchived={showArchived}
 											onToggleArchived={(archived) => uiDispatch({ type: "TOGGLE_ARCHIVED", archived })}
+											onBulkDelete={handleBulkDelete}
+											onBulkModeAll={handleBulkModeAll}
 										/>
 									</div>
 

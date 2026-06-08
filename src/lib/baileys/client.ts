@@ -366,6 +366,10 @@ const turnState = createIoredisTurnState(redisClient as any);
 
 // Instancia global del socket y controlador de reconexión
 export let globalSock: ReturnType<typeof makeWASocket> | null = null;
+// Verdadero sólo cuando el socket alcanzó el estado "open" (conexión establecida con WhatsApp).
+// globalSock puede ser no-null durante "connecting" o "qr", pero enviar en esos estados
+// produce mensajes en estado "cargando" permanente en el destinatario.
+let isSocketConnected = false;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let outboxInterval: NodeJS.Timeout | null = null;
 let profilePicInterval: NodeJS.Timeout | null = null;
@@ -490,10 +494,10 @@ export const inboundHandler = createInboundHandler({
 		});
 	},
 	sendMessage: async (jid, text) => {
-		if (globalSock) {
+		if (globalSock && isSocketConnected) {
 			await globalSock.sendMessage(jid, { text });
 		} else {
-			throw new Error("[bot] Socket no conectado. No se puede enviar mensaje.");
+			throw new Error("[bot] Socket no conectado o no listo. No se puede enviar mensaje.");
 		}
 	},
 	notifyTelegramHumanNeeded: async (payload) => {
@@ -596,7 +600,7 @@ function outboxSendPayload(item: any) {
 function startOutboxProcessor() {
 	if (outboxInterval) return;
 	outboxInterval = setInterval(async () => {
-		if (!globalSock || isProcessingOutbox) return;
+		if (!globalSock || !isSocketConnected || isProcessingOutbox) return;
 		isProcessingOutbox = true;
 		try {
 			const pending = await getPendingOutbox(20);
@@ -779,6 +783,7 @@ export async function startWASocket() {
 
 		// 3. Estado de conexión: open (conectado)
 		if (connection === "open") {
+			isSocketConnected = true;
 			console.log("[bot] Conexión abierta con éxito.");
 			const rawId = sock.user?.id || "";
 			const selfName = typeof sock.user?.name === "string" ? sock.user.name.trim() : "";
@@ -853,6 +858,7 @@ export async function startWASocket() {
 
 		// 4. Estado de conexión: close (desconectado/caído)
 		if (connection === "close") {
+			isSocketConnected = false;
 			stopOutboxProcessor();
 			const status = (lastDisconnect?.error as any)?.output?.statusCode || 0;
 			console.log(`[bot] Conexión cerrada. Status code: ${status}`);
@@ -1020,5 +1026,6 @@ export async function shutdownWASocket() {
 			console.warn("[bot] Error cerrando el socket anterior:", error);
 		}
 		globalSock = null;
+		isSocketConnected = false;
 	}
 }

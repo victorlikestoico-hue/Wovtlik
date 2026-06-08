@@ -52,7 +52,7 @@ export type BQParam = {
 export async function runBQQuery<T extends Record<string, string | null> = Record<string, string | null>>(
 	sql:       string,
 	params:    BQParam[] = [],
-	projectId  = "web-dinamica-429617",
+	projectId  = "vtlik-498723",
 ): Promise<T[]> {
 	if (!SA_EMAIL || !SA_KEY) throw new Error("[bq] GOOGLE_SA_EMAIL / GOOGLE_SA_PRIVATE_KEY not set");
 	const token = await getAccessToken();

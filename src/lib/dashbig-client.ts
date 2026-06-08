@@ -1,6 +1,6 @@
 import { runBQQuery, isBigQueryConfigured, type BQParam } from "./bigquery-client.ts";
 
-const BQ_PROJECT = "web-dinamica-429617";
+const BQ_PROJECT = "vtlik-498723";
 const BQ_DATASET = "reporting_looker";
 const VIEW_360   = `\`${BQ_PROJECT}.${BQ_DATASET}.vw_agent_performance_360\``;
 const TABLE_GA   = `\`${BQ_PROJECT}.${BQ_DATASET}.raw_data_gestion_adecuada\``;

@@ -10,6 +10,8 @@ interface ConversationListProps {
 	onSelectConversation: (id: number) => void;
 	showArchived: boolean;
 	onToggleArchived: (val: boolean) => void;
+	onBulkDelete?: () => Promise<void>;
+	onBulkModeAll?: (mode: "AI" | "HUMAN") => Promise<void>;
 }
 
 type FilterType = "ALL" | "PENDING" | "UNREAD" | "READ";
@@ -54,9 +56,33 @@ export default function ConversationList({
 	onSelectConversation,
 	showArchived,
 	onToggleArchived,
+	onBulkDelete,
+	onBulkModeAll,
 }: ConversationListProps) {
 	const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
 	const [searchQuery, setSearchQuery] = useState("");
+	const [bulkLoading, setBulkLoading] = useState<string | null>(null);
+
+	const handleBulkDelete = async () => {
+		if (bulkLoading) return;
+		if (!confirm(`¿Eliminar TODOS los ${showArchived ? "chats archivados" : "chats activos"}? Esta acción no se puede deshacer.`)) return;
+		setBulkLoading("delete");
+		try {
+			await onBulkDelete?.();
+		} finally {
+			setBulkLoading(null);
+		}
+	};
+
+	const handleBulkMode = async (mode: "AI" | "HUMAN") => {
+		if (bulkLoading) return;
+		setBulkLoading(mode);
+		try {
+			await onBulkModeAll?.(mode);
+		} finally {
+			setBulkLoading(null);
+		}
+	};
 
 	const filteredConversations = useMemo(() => {
 		const normalizedSearch = searchQuery.trim().toLowerCase();
@@ -80,7 +106,7 @@ export default function ConversationList({
 				<h2 className="font-display text-sm font-bold uppercase tracking-wider text-on-surface">
 					{showArchived ? "Chats archivados" : "Chats activos"}
 				</h2>
-				<div className="flex items-center gap-2">
+				<div className="flex items-center gap-1.5">
 					<button
 						type="button"
 						onClick={() => onToggleArchived(!showArchived)}
@@ -118,6 +144,46 @@ export default function ConversationList({
 					)}
 				</div>
 			</div>
+
+			{(onBulkDelete || onBulkModeAll) && conversations.length > 0 && (
+				<div className="flex shrink-0 flex-wrap gap-1.5 px-4 pb-3">
+					{onBulkModeAll && (
+						<>
+							<button
+								type="button"
+								onClick={() => handleBulkMode("AI")}
+								disabled={bulkLoading !== null}
+								className="flex items-center gap-1 rounded-lg border border-primary/40 bg-primary/10 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wider text-primary transition-all hover:bg-primary/20 disabled:opacity-50"
+								title="Activar modo IA en todos los chats visibles"
+							>
+								<RobotIcon size={8} />
+								{bulkLoading === "AI" ? "..." : "Activar IA"}
+							</button>
+							<button
+								type="button"
+								onClick={() => handleBulkMode("HUMAN")}
+								disabled={bulkLoading !== null}
+								className="flex items-center gap-1 rounded-lg border border-outline-variant/50 bg-surface-container-high px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wider text-on-surface-variant transition-all hover:border-outline-variant hover:text-on-surface disabled:opacity-50"
+								title="Desactivar modo IA en todos los chats visibles"
+							>
+								<UserIcon size={8} />
+								{bulkLoading === "HUMAN" ? "..." : "Desactivar IA"}
+							</button>
+						</>
+					)}
+					{onBulkDelete && (
+						<button
+							type="button"
+							onClick={handleBulkDelete}
+							disabled={bulkLoading !== null}
+							className="ml-auto flex items-center gap-1 rounded-lg border border-error/40 bg-error/10 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wider text-error transition-all hover:bg-error/20 disabled:opacity-50"
+							title="Eliminar todos los chats visibles"
+						>
+							{bulkLoading === "delete" ? "..." : "Eliminar todos"}
+						</button>
+					)}
+				</div>
+			)}
 
 			<div className="flex shrink-0 flex-wrap gap-1.5 border-b border-outline-variant/20 px-4 pb-3">
 				{[

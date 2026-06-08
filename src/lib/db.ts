@@ -491,6 +491,34 @@ export async function deleteConversation(id: number): Promise<void> {
 	await pool.query("DELETE FROM conversations WHERE id = $1", [id]);
 }
 
+// 20b. bulkDeleteConversations(archived)
+export async function bulkDeleteConversations(archived: boolean): Promise<number> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<{ count: string }>(
+		"WITH deleted AS (DELETE FROM conversations WHERE is_archived = $1 RETURNING id) SELECT COUNT(*)::text AS count FROM deleted",
+		[archived],
+	);
+	return Number(res.rows[0]?.count ?? 0);
+}
+
+// 20c. bulkSetMode(mode, archived)
+export async function bulkSetMode(
+	mode: "AI" | "HUMAN",
+	archived: boolean,
+): Promise<number> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<{ count: string }>(
+		`WITH updated AS (
+			UPDATE conversations
+			SET mode = $1, mode_reason = 'bulk_dashboard', mode_changed_by = 'dashboard', mode_changed_at = NOW(), updated_at = NOW()
+			WHERE is_archived = $2
+			RETURNING id
+		) SELECT COUNT(*)::text AS count FROM updated`,
+		[mode, archived],
+	);
+	return Number(res.rows[0]?.count ?? 0);
+}
+
 // 21. getActiveSystemPrompt()
 export async function getActiveSystemPrompt(): Promise<string> {
 	await ensureSchemaInitialized();
