@@ -45,6 +45,7 @@ import {
 	enqueueOutbox,
 	listConversations,
 	getAgentProfile,
+	getAgentProfileByEmail,
 	saveAgentProfile,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
@@ -369,6 +370,36 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 	const emailMatch = message.match(EMAIL_REGEX);
 	if (!emailMatch) return null;
 	const email = emailMatch[0].toLowerCase();
+
+	// Verificar si este teléfono ya tiene un email vinculado
+	const existing = await getAgentProfile(phone);
+	if (existing) {
+		if (existing.email.toLowerCase() === email) {
+			// Es el mismo email — confirmar que ya está registrado
+			return buildDirectReply(
+				`✅ Tu email *${email}* ya está registrado.`,
+				'Podés escribir "mis métricas" para ver tus KPIs.',
+			);
+		}
+		// Intento de cambiar a otro email — bloqueado
+		return buildDirectReply(
+			`⚠️ Ya tenés vinculado el email *${existing.email}* a este número.`,
+			"Para cambiar de email necesitás que el admin desvincule tu número actual.",
+			"Contactá a tu supervisor para gestionarlo.",
+		);
+	}
+
+	// Verificar si el email ya está vinculado a OTRO teléfono
+	const takenBy = await getAgentProfileByEmail(email);
+	if (takenBy) {
+		return buildDirectReply(
+			`⚠️ El email *${email}* ya está vinculado a otro número.`,
+			"Si cambiaste de número, pedile al admin que desvincule el número anterior.",
+			"Contactá a tu supervisor para gestionarlo.",
+		);
+	}
+
+	// Registro libre — guardar
 	await saveAgentProfile(phone, email);
 	return buildDirectReply(
 		`✅ Email registrado: *${email}*`,

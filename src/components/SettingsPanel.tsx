@@ -156,6 +156,88 @@ function CapabilityProviderFields({
 	);
 }
 
+interface AgentProfileRow {
+	phone: string;
+	email: string;
+}
+
+function AgentProfilesSection() {
+	const [profiles, setProfiles] = useState<AgentProfileRow[]>([]);
+	const [loadingProfiles, setLoadingProfiles] = useState(false);
+	const [unlinking, setUnlinking] = useState<string | null>(null);
+
+	const loadProfiles = async () => {
+		setLoadingProfiles(true);
+		try {
+			const res = await fetch("/api/agent-profiles");
+			if (res.ok) setProfiles(await res.json());
+		} catch {
+			// silent
+		} finally {
+			setLoadingProfiles(false);
+		}
+	};
+
+	useEffect(() => {
+		loadProfiles();
+	}, []);
+
+	const handleUnlink = async (phone: string) => {
+		if (!confirm(`¿Desvincular el número ${phone}? El agente podrá registrar un nuevo correo desde ese número.`)) return;
+		setUnlinking(phone);
+		try {
+			const res = await fetch(`/api/agent-profiles?phone=${encodeURIComponent(phone)}`, { method: "DELETE" });
+			if (res.ok) setProfiles((prev) => prev.filter((p) => p.phone !== phone));
+			else alert("Error al desvincular. Intentá de nuevo.");
+		} finally {
+			setUnlinking(null);
+		}
+	};
+
+	return (
+		<div className="bg-surface/80 border border-outline-variant/20 p-5 rounded-2xl space-y-4">
+			<div className="flex items-center justify-between">
+				<h3 className="text-xs font-bold text-on-surface uppercase tracking-wider flex items-center gap-2">
+					<span>🔐</span> Agentes Registrados (Número → Correo)
+				</h3>
+				<button
+					type="button"
+					onClick={loadProfiles}
+					disabled={loadingProfiles}
+					className="text-[9px] font-bold uppercase tracking-wider text-primary hover:underline disabled:opacity-50"
+				>
+					{loadingProfiles ? "Cargando..." : "Actualizar"}
+				</button>
+			</div>
+			<p className="text-[9px] text-on-surface-variant/80">
+				Cada número de WhatsApp solo puede estar vinculado a un correo corporativo. Si un agente cambia de número, desvinculá el anterior para que pueda registrarse de nuevo.
+			</p>
+			{profiles.length === 0 ? (
+				<p className="text-[10px] text-on-surface-variant/60 italic">Sin agentes registrados todavía.</p>
+			) : (
+				<div className="divide-y divide-outline-variant/15 rounded-xl border border-outline-variant/20 overflow-hidden">
+					{profiles.map((p) => (
+						<div key={p.phone} className="flex items-center justify-between px-4 py-2.5 bg-surface-container-low/50">
+							<div className="flex flex-col gap-0.5 min-w-0">
+								<span className="text-[10px] font-bold text-on-surface font-mono truncate">+{p.phone}</span>
+								<span className="text-[9px] text-on-surface-variant truncate">{p.email}</span>
+							</div>
+							<button
+								type="button"
+								onClick={() => handleUnlink(p.phone)}
+								disabled={unlinking === p.phone}
+								className="ml-4 shrink-0 rounded-lg border border-error/40 bg-error/10 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wider text-error transition-all hover:bg-error/20 disabled:opacity-50"
+							>
+								{unlinking === p.phone ? "..." : "Desvincular"}
+							</button>
+						</div>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
 export default function SettingsPanel() {
 	const [settings, setSettings] = useState<Record<string, any>>({});
 	const [loading, setLoading] = useState(false);
@@ -549,6 +631,9 @@ export default function SettingsPanel() {
 						El ID está en la URL del sheet: docs.google.com/spreadsheets/d/<b>ID_ACÁ</b>/edit
 					</p>
 				</div>
+
+				{/* Grupo: Perfiles de Agentes */}
+				<AgentProfilesSection />
 
 				{/* Grupo 4: Telegram */}
 				<div className="bg-surface/80 border border-outline-variant/20 p-5 rounded-2xl space-y-3">

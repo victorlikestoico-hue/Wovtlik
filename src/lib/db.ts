@@ -809,6 +809,24 @@ export async function getAgentProfile(phone: string): Promise<AgentProfileRow | 
 	return res.rows[0] ?? null;
 }
 
+export async function getAgentProfileByEmail(email: string): Promise<AgentProfileRow | null> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<AgentProfileRow>(
+		"SELECT * FROM agent_profiles WHERE LOWER(email) = LOWER($1) LIMIT 1",
+		[email],
+	);
+	return res.rows[0] ?? null;
+}
+
+export async function deleteAgentProfile(phone: string): Promise<boolean> {
+	await ensureSchemaInitialized();
+	const res = await pool.query(
+		"DELETE FROM agent_profiles WHERE phone = $1",
+		[phone],
+	);
+	return (res.rowCount ?? 0) > 0;
+}
+
 export async function saveAgentProfile(
 	phone: string,
 	email: string,
