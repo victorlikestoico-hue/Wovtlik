@@ -87,13 +87,15 @@ const OFFLINE_KEYWORDS = [
 	"ponme offline", "ponerme fuera de línea", "ponerme fuera de linea",
 	"cambiarme a fuera de línea", "cambiarme a offline", "ponme en offline",
 	"se me cayó el internet", "se me cayo el internet",
-	"perdí internet", "perdi internet", "se me fue el internet",
+	"se cayó el internet", "se cayo el internet",
+	"perdí internet", "perdi internet", "se me fue el internet", "se fue el internet",
 	"sin internet y tengo chat", "tengo chats y sin internet",
 	"caí del sistema", "cai del sistema",
 	"me quedé sin internet", "me quede sin internet",
 	"ponme inactivo", "dejarme fuera de línea", "dejarme fuera de linea",
 	"pasarme a fuera de línea", "pasarme a offline",
 	// Variantes de "desconectar"
+	"desconectarme",  // suelto cubre "me ayudas a desconectarme", "ayudame a desconectarme", etc.
 	"desconéctame", "desconectame", "me desconecto", "quiero desconectarme",
 	"necesito desconectarme", "me voy a desconectar", "voy a desconectarme",
 	"podés desconectarme", "podes desconectarme", "me podés desconectar", "me podes desconectar",
@@ -405,7 +407,7 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 	}
 
 	const msgLower = message.toLowerCase();
-	const reason = (msgLower.includes("internet") || msgLower.includes("caí") || msgLower.includes("cai"))
+	const reason = (msgLower.includes("internet") || msgLower.includes("caí") || msgLower.includes("cai") || msgLower.includes("cay") || msgLower.includes("señal") || msgLower.includes("conexi"))
 		? "Internet caído — solicitud del agente"
 		: message.trim() || "Solicitud directa del agente";
 
