@@ -452,6 +452,12 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 const turnState = createIoredisTurnState(redisClient as any);
 
+// Mapping @lid JID → @s.whatsapp.net JID built from contacts events.
+// WhatsApp accounts migrated to the new linked-device protocol send messages
+// from a LID JID instead of their phone JID. Without this map the extracted
+// "phone" would be the LID number (not the real phone), breaking profile lookups.
+const lidToPhoneJid = new Map<string, string>();
+
 // Instancia global del socket y controlador de reconexión
 export let globalSock: ReturnType<typeof makeWASocket> | null = null;
 // Verdadero sólo cuando el socket alcanzó el estado "open" (conexión establecida con WhatsApp).
@@ -476,6 +482,7 @@ export const inboundHandler = createInboundHandler({
 		getSettings,
 	},
 	turnState,
+	resolveLid: (lidJid) => lidToPhoneJid.get(lidJid),
 	getRecentHistory,
 	getActiveSystemPrompt,
 	callDeepSeek: async (input) => {
@@ -1070,8 +1077,26 @@ export async function startWASocket() {
 		}
 	});
 
+	function processContactForLid(contact: any) {
+		// Build LID↔phone mapping for accounts using the new linked-device protocol.
+		// WhatsApp provides contact.lid (the @lid JID) when contact.id is the @s.whatsapp.net JID.
+		// We store lid→phoneJid so canonicalChatJid can resolve incoming @lid messages.
+		if (contact.id?.endsWith("@s.whatsapp.net") && contact.lid) {
+			const lidJid = contact.lid.endsWith("@lid") ? contact.lid : `${contact.lid}@lid`;
+			lidToPhoneJid.set(lidJid, contact.id);
+		}
+		// Also handle the inverse: id is @lid, verifiedName or senderPn gives us the phone
+		if (contact.id?.endsWith("@lid") && contact.senderPn) {
+			const phoneJid = contact.senderPn.endsWith("@s.whatsapp.net")
+				? contact.senderPn
+				: `${contact.senderPn}@s.whatsapp.net`;
+			lidToPhoneJid.set(contact.id, phoneJid);
+		}
+	}
+
 	sock.ev.on("contacts.upsert", async (contacts: any[]) => {
 		await Promise.all(contacts.map(async (contact) => {
+			processContactForLid(contact);
 			if (contact.id && !contact.id.endsWith("@g.us")) {
 				const name = contact.name?.trim() || contact.notify?.trim() || contact.verifiedName?.trim();
 				if (name && name !== "WOpen" && name !== "Azokia" && name !== "Azokiallc") {
@@ -1088,6 +1113,7 @@ export async function startWASocket() {
 
 	sock.ev.on("contacts.update", async (contacts: any[]) => {
 		await Promise.all(contacts.map(async (contact) => {
+			processContactForLid(contact);
 			if (contact.id && !contact.id.endsWith("@g.us")) {
 				const name = contact.name?.trim() || contact.notify?.trim() || contact.verifiedName?.trim();
 				if (name && name !== "WOpen" && name !== "Azokia" && name !== "Azokiallc") {

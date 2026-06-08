@@ -118,6 +118,8 @@ export interface InboundHandlerDeps {
 	turnState: TurnState;
 	getRecentHistory: (conversationId: number) => Promise<HistoryMessage[]>;
 	getActiveSystemPrompt: () => Promise<string>;
+	/** Resolves a @lid JID to its corresponding @s.whatsapp.net JID, if known */
+	resolveLid?: (lidJid: string) => string | undefined;
 	callDeepSeek: (input: {
 		conversationId: number;
 		history: HistoryMessage[];
@@ -199,10 +201,17 @@ function isValidOneToOneNotify(
 	return true;
 }
 
-function canonicalChatJid(message: WhatsAppMessage): string {
+function canonicalChatJid(
+	message: WhatsAppMessage,
+	resolveLid?: (lidJid: string) => string | undefined,
+): string {
 	const remoteJid = message.key.remoteJid as string;
-	if (remoteJid.endsWith("@lid") && message.key.senderPn) {
-		return message.key.senderPn;
+	if (remoteJid.endsWith("@lid")) {
+		// Try Baileys-provided senderPn first
+		if (message.key.senderPn) return message.key.senderPn;
+		// Fall back to our LID→phone map built from contacts events
+		const resolved = resolveLid?.(remoteJid);
+		if (resolved) return resolved;
 	}
 	return remoteJid;
 }
@@ -278,7 +287,7 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 		if (!isValidOneToOneNotify(upsert, message)) return { status: "ignored" };
 
 		const now = deps.now();
-		const chatJid = canonicalChatJid(message);
+		const chatJid = canonicalChatJid(message, deps.resolveLid);
 		const whatsappMessageId = message.key.id;
 		const fromMe = message.key.fromMe === true;
 		const { mediaType, content: detectedText } = detectMediaTypeAndContent(message);
