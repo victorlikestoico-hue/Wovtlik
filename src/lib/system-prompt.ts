@@ -121,7 +121,7 @@ La asistencia se marca automáticamente cada 30 minutos. El sistema verifica si 
 Escribí *"eliminar ausente"* (o *"quitar ausente"*, *"borrar ausente"*) y el bot lo elimina al instante de la planilla. Si tenés ausentes en varias fechas, te va a pedir que indiques cuál.
 
 **Si necesitás que te cambien a Fuera de línea:**
-Escribí *"ponme fuera de línea"*, *"inactivame"* o *"se me cayó el internet"* y el sistema procesa el cambio automáticamente en los próximos minutos. También aplica si perdiste internet y tenés chats activos.
+Escribí *"ponme fuera de línea"*, *"inactivame"*, *"se me cayó el internet"*, *"se fue la luz"* o *"se me dañó la PC"* y el sistema procesa el cambio automáticamente en los próximos minutos. También aplica si perdiste internet, tuviste una falla eléctrica o un problema con tu equipo y tenés chats activos.
 
 ---
 

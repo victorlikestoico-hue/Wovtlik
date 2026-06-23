@@ -121,6 +121,29 @@ const OFFLINE_KEYWORDS = [
 	"me quedé sin señal", "me quede sin señal", "perdí la señal", "perdi la señal",
 	"se me cayó la conexión", "se me cayo la conexion", "sin conexión", "sin conexion",
 	"problemas de conexión", "problemas de conexion", "se me fue la señal",
+	// Falla de energía / corte de luz
+	"se fue la luz", "se me fue la luz", "se cortó la luz", "se corto la luz",
+	"sin luz", "no tengo luz", "corte de luz", "hubo un corte de luz",
+	"se fue la energía", "se fue la energia", "se me fue la energía", "se me fue la energia",
+	"falla de energía", "falla de energia", "falla eléctrica", "falla electrica",
+	"fallo eléctrico", "fallo electrico", "corte de energía", "corte de energia",
+	"sin energía", "sin energia", "se cortó la energía", "se corto la energia",
+	"se fue la corriente", "se cortó la corriente", "se corto la corriente",
+	"sin corriente", "apagón", "apagon", "hubo un apagón", "hubo un apagon",
+	// Falla o daño del equipo / PC
+	"se dañó mi pc", "se daño mi pc", "se rompió mi pc", "se rompio mi pc",
+	"se quemó mi pc", "se quemo mi pc", "mi pc se dañó", "mi pc se daño",
+	"mi pc se rompió", "mi pc se rompio", "falla en mi pc", "falla de pc",
+	"problema con mi pc", "problemas con mi pc",
+	"se dañó mi computador", "se daño mi computador",
+	"se dañó mi computadora", "se daño mi computadora",
+	"se rompió mi computador", "se rompio mi computador",
+	"se rompió mi computadora", "se rompio mi computadora",
+	"mi computador se dañó", "mi computador se daño",
+	"mi computadora se dañó", "mi computadora se daño",
+	"se me dañó el computador", "se me daño el computador",
+	"se me dañó la pc", "se me daño la pc",
+	"falla en mi computador", "falla en mi computadora",
 ];
 
 const APPOINTMENT_KEYWORDS = [
@@ -605,9 +628,16 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 	}
 
 	const msgLower = message.toLowerCase();
-	const reason = (msgLower.includes("internet") || msgLower.includes("caí") || msgLower.includes("cai") || msgLower.includes("cay") || msgLower.includes("señal") || msgLower.includes("conexi"))
+	const isInternetIssue = msgLower.includes("internet") || msgLower.includes("caí") || msgLower.includes("cai")
+		|| msgLower.includes("cay") || msgLower.includes("señal") || msgLower.includes("conexi");
+	const isPowerOrPcIssue = msgLower.includes("luz") || msgLower.includes("energ") || msgLower.includes("corriente")
+		|| msgLower.includes("apag") || msgLower.includes("electric") || msgLower.includes("eléctric")
+		|| /\bpc\b/.test(msgLower) || msgLower.includes("computador");
+	const reason = isInternetIssue
 		? "Internet caído — solicitud del agente"
-		: message.trim() || "Solicitud directa del agente";
+		: isPowerOrPcIssue
+			? "Falla de energía/PC — solicitud del agente"
+			: message.trim() || "Solicitud directa del agente";
 
 	try {
 		const queued = await queueAgentOffline(profile.email, reason, spreadsheetId);
