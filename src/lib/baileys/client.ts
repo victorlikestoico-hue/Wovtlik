@@ -150,6 +150,15 @@ const APPOINTMENT_KEYWORDS = [
 	"agendar cita", "agendar una cita", "programar cita", "programar una cita",
 	"crear cita", "agendar visita", "agendar reunion", "agendar reunión",
 	"agendame", "agendarme", "agendar con", "cita con", "reservar cita",
+	// Variantes de "quiero/necesito agendar/programar algo"
+	"quiero agendar", "necesito agendar", "quisiera agendar", "puedo agendar",
+	"quiero programar", "necesito programar", "quisiera programar",
+	"agendar llamada", "programar llamada", "agendar una llamada", "programar una llamada",
+	"agendar demo", "programar demo", "agendar una demo", "programar una demo",
+	"sacar una cita", "sacar cita", "pedir una cita", "pedir cita",
+	"agendar un turno", "programar un turno", "reservar un turno", "reservar turno",
+	"coordinar una cita", "coordinar cita", "coordinar una visita", "coordinar visita",
+	"coordinar una llamada", "coordinar llamada", "coordinar una reunion", "coordinar una reunión",
 ];
 
 const ABSENCE_KEYWORDS = [
@@ -170,12 +179,15 @@ const ABSENCE_KEYWORDS = [
 // type so that tryRegisterEmailReply can chain back to the right flow.
 type PendingIntent =
 	| "absence" | "absence_date" | "offline" | "offline_reason" | "schedule" | "metrics"
-	| "appointment" | "appointment_phone" | "appointment_date" | "appointment_time" | "appointment_name";
+	| "appointment" | "appointment_role" | "appointment_phone" | "appointment_date" | "appointment_time" | "appointment_name";
 const pendingIntentKey = (phone: string) => `bot:pending_intent:${phone}`;
 const PENDING_INTENT_TTL = 300; // 5 minutes
 
 // Acumula los datos parciales de una cita en construcción durante el flujo multi-turno.
+// "role" distingue si quien escribe es un agente (agenda para un tercero) o un cliente
+// nuevo de vtlik (agenda para sí mismo, con su propio número de WhatsApp).
 interface AppointmentPartial {
+	role?: "agent" | "client";
 	clientPhone?: string;
 	dateISO?: string;
 	hour?: number;
@@ -440,10 +452,19 @@ async function clearAppointmentState(phone: string): Promise<void> {
 	await redisClient.del(pendingAppointmentDataKey(phone));
 }
 
+async function getAppointmentPartial(phone: string): Promise<AppointmentPartial> {
+	const raw = await redisClient.get(pendingAppointmentDataKey(phone));
+	return raw ? JSON.parse(raw) : {};
+}
+
+async function saveAppointmentPartial(phone: string, partial: AppointmentPartial): Promise<void> {
+	await redisClient.set(pendingAppointmentDataKey(phone), JSON.stringify(partial), "EX", PENDING_INTENT_TTL);
+}
+
 async function finalizeAppointment(
 	phone: string,
-	profile: { phone: string; email: string },
-	partial: Required<AppointmentPartial>,
+	profile: { phone: string; email: string } | null,
+	partial: Required<Omit<AppointmentPartial, "role">>,
 ): Promise<string> {
 	const settings = await getSettings();
 	const durationMinutes = Number(settings.appointment_duration_minutes ?? 30);
@@ -455,6 +476,9 @@ async function finalizeAppointment(
 	const startLocal = `${year}-${pad(month)}-${pad(day)}T${pad(partial.hour)}:${pad(partial.minute)}:00`;
 	const appointmentAt = new Date(`${startLocal}-03:00`); // Argentina (UTC-3, sin DST actual)
 
+	// Si no hay perfil de agente, quien agenda es el propio cliente (autoagendado).
+	const bookedBy = profile ? profile.email : `cliente ${partial.clientPhone} (autoagendado)`;
+
 	let calendarEventId: string | null = null;
 	if (calendarId && refreshToken) {
 		const endDate = new Date(appointmentAt.getTime() + durationMinutes * 60_000);
@@ -462,7 +486,7 @@ async function finalizeAppointment(
 		const event = await createCalendarEvent({
 			calendarId,
 			summary: `Cita con ${partial.clientName}`,
-			description: `Agendada por ${profile.email} vía WhatsApp.`,
+			description: `Agendada por ${bookedBy} vía WhatsApp.`,
 			startISO: startLocal,
 			endISO: endLocal,
 			refreshToken,
@@ -476,9 +500,9 @@ async function finalizeAppointment(
 	await saveCrmTask({
 		task_type: "appointment",
 		title: `Cita con ${partial.clientName}`,
-		description: `Agendada por ${profile.email}`,
+		description: `Agendada por ${bookedBy}`,
 		conversation_id: conversation.id,
-		agent_phone: phone,
+		agent_phone: profile ? phone : null,
 		calendar_event_id: calendarEventId,
 		appointment_at: appointmentAt,
 		due_at: appointmentAt,
@@ -499,19 +523,12 @@ async function finalizeAppointment(
 	);
 }
 
-async function tryScheduleAppointmentReply(phone: string, message: string): Promise<string | null> {
-	const profile = await getAgentProfile(phone);
-	if (!profile) {
-		await redisClient.set(pendingIntentKey(phone), "appointment", "EX", PENDING_INTENT_TTL);
-		await stashAppointmentPartial(phone, message);
-		return buildDirectReply(
-			"Para agendar una cita necesito tu email corporativo 📧",
-			'Respondé con tu email, ej: "luis@pedidosya.com"',
-		);
-	}
-
-	const partial = await stashAppointmentPartial(phone, message);
-
+/** Pide los datos que falten (cliente/fecha/hora/nombre) y agenda cuando ya están completos. */
+async function continueAppointmentFlow(
+	phone: string,
+	partial: AppointmentPartial,
+	profile: { phone: string; email: string } | null,
+): Promise<string> {
 	if (!partial.clientPhone) {
 		await redisClient.set(pendingIntentKey(phone), "appointment_phone", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply("¿Cuál es el número de WhatsApp del cliente?", 'Ej: "5512345678"');
@@ -526,10 +543,73 @@ async function tryScheduleAppointmentReply(phone: string, message: string): Prom
 	}
 	if (!partial.clientName) {
 		await redisClient.set(pendingIntentKey(phone), "appointment_name", "EX", PENDING_INTENT_TTL);
-		return buildDirectReply("¿Nombre del cliente o motivo de la cita?", 'Ej: "Juan Pérez, presupuesto"');
+		return buildDirectReply(
+			profile ? "¿Nombre del cliente o motivo de la cita?" : "¿Cuál es tu nombre?",
+			profile ? 'Ej: "Juan Pérez, presupuesto"' : 'Ej: "Juan Pérez"',
+		);
 	}
 
-	return await finalizeAppointment(phone, profile, partial as Required<AppointmentPartial>);
+	return await finalizeAppointment(phone, profile, partial as Required<Omit<AppointmentPartial, "role">>);
+}
+
+async function tryScheduleAppointmentReply(phone: string, message: string): Promise<string | null> {
+	const profile = await getAgentProfile(phone);
+
+	if (profile) {
+		const partial = await stashAppointmentPartial(phone, message);
+		return await continueAppointmentFlow(phone, partial, profile);
+	}
+
+	// Sin perfil de agente vinculado: puede ser un agente que todavía no registró su email,
+	// o un cliente nuevo de vtlik que quiere agendar para sí mismo. Hay que preguntar para
+	// no pedirle "tu email corporativo" a un cliente externo, ni agendarle una cita a ciegas.
+	let partial = await getAppointmentPartial(phone);
+
+	if (partial.role === "agent") {
+		await stashAppointmentPartial(phone, message);
+		await redisClient.set(pendingIntentKey(phone), "appointment", "EX", PENDING_INTENT_TTL);
+		return buildDirectReply(
+			"Para agendar una cita necesito tu email corporativo 📧",
+			'Respondé con tu email, ej: "luis@pedidosya.com"',
+		);
+	}
+
+	if (partial.role === "client") {
+		partial = await stashAppointmentPartial(phone, message);
+		partial.clientPhone = phone; // el cliente agenda para sí mismo, con su propio número
+		await saveAppointmentPartial(phone, partial);
+		return await continueAppointmentFlow(phone, partial, null);
+	}
+
+	const pending = await redisClient.get(pendingIntentKey(phone));
+	if (pending === "appointment_role") {
+		// Esta respuesta es exclusivamente "agente"/"cliente": no se parsea como fecha/hora/nombre.
+		const lower = message.toLowerCase();
+		if (lower.includes("agente")) {
+			partial.role = "agent";
+			await saveAppointmentPartial(phone, partial);
+			await redisClient.set(pendingIntentKey(phone), "appointment", "EX", PENDING_INTENT_TTL);
+			return buildDirectReply(
+				"Para agendar una cita necesito tu email corporativo 📧",
+				'Respondé con tu email, ej: "luis@pedidosya.com"',
+			);
+		}
+		if (lower.includes("cliente")) {
+			partial.role = "client";
+			partial.clientPhone = phone; // el cliente agenda para sí mismo, con su propio número
+			await saveAppointmentPartial(phone, partial);
+			return await continueAppointmentFlow(phone, partial, null);
+		}
+		return buildDirectReply('No entendí 🙏 Respondé "agente" o "cliente" para continuar.');
+	}
+
+	// Primera vez que pide una cita sin perfil registrado: guardar lo que ya haya dado y preguntar el rol.
+	partial = await stashAppointmentPartial(phone, message);
+	await redisClient.set(pendingIntentKey(phone), "appointment_role", "EX", PENDING_INTENT_TTL);
+	return buildDirectReply(
+		"¿Sos agente de vtlik o querés agendar como cliente?",
+		'Respondé "agente" o "cliente".',
+	);
 }
 
 async function tryRemoveAbsenceReply(phone: string, message: string): Promise<string | null> {
@@ -706,7 +786,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 				);
 			}
 
-			if (pending === "appointment") {
+			if (pending === "appointment" || pending === "appointment_role") {
 				await redisClient.del(pendingIntentKey(phone));
 				const reply = await tryScheduleAppointmentReply(phone, "");
 				return reply ?? buildDirectReply(
@@ -782,7 +862,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 		);
 	}
 
-	if (pending === "appointment") {
+	if (pending === "appointment" || pending === "appointment_role") {
 		await redisClient.del(pendingIntentKey(phone));
 		const reply = await tryScheduleAppointmentReply(phone, "");
 		return reply ?? buildDirectReply(
