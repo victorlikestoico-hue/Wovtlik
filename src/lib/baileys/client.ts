@@ -48,6 +48,7 @@ import {
 	getAgentProfileByEmail,
 	saveAgentProfile,
 	saveCrmTask,
+	notifyGroupFailureReport,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
 import { getAgentSchedule, clearAgentAbsence, queueAgentOffline } from "../sheets-client.ts";
@@ -144,6 +145,18 @@ const OFFLINE_KEYWORDS = [
 	"se me dañó el computador", "se me daño el computador",
 	"se me dañó la pc", "se me daño la pc",
 	"falla en mi computador", "falla en mi computadora",
+	"mi pc está actualizando", "mi pc esta actualizando",
+	"mi computador está actualizando", "mi computador esta actualizando",
+	"mi computadora está actualizando", "mi computadora esta actualizando",
+	"se está actualizando mi pc", "se esta actualizando mi pc",
+	"está actualizando mi equipo", "esta actualizando mi equipo",
+	"mi equipo está actualizando", "mi equipo esta actualizando",
+	// Falla del aplicativo HC (donde están los chats)
+	"hc no funciona", "hc no carga", "hc lento", "hc lenta", "lentitud en hc",
+	"el hc no funciona", "el hc no carga", "se cae el hc", "se cae hc",
+	"no me deja entrar al hc", "hc no abre", "se traba el hc", "se traba hc",
+	"hc caído", "hc caido", "falla el hc", "falla en hc", "falla en el hc",
+	"problemas con hc", "problemas con el hc", "el hc se cayó", "el hc se cayo",
 ];
 
 const APPOINTMENT_KEYWORDS = [
@@ -174,6 +187,65 @@ const ABSENCE_KEYWORDS = [
 	"sacar mi falta", "borrar mi falta", "eliminar mi falta",
 	"tengo ausente", "me aparece ausente", "me sale ausente",
 ];
+
+// ── Monitoreo del grupo "CS reporte fallas Internet/Luz" ───────────────────
+// Los agentes reportan ahí (no por DM) caídas de internet, luz y fallas de HC.
+// El bot detecta esos reportes, identifica al remitente real (no al grupo) y
+// le abre/continúa la conversación por privado para confirmar antes de tocar nada.
+const FALLAS_GROUP_JID = "5491151522899-1587685231@g.us";
+const FALLAS_GROUP_DEBOUNCE_MS = 75_000; // ventana para agrupar mensajes separados del mismo agente
+const FALLAS_GROUP_DEBOUNCE_TTL = 120; // segundos que vive el acumulado en Redis
+const GROUP_REPORT_PENDING_TTL = 600; // 10 minutos para confirmar por privado
+
+const RESOLVED_REPORT_KEYWORDS = [
+	"ya llegó la luz", "ya llego la luz", "ya volvió la luz", "ya volvio la luz",
+	"ya tengo luz", "ya tengo internet", "ya volvió el internet", "ya volvio el internet",
+	"ya se solucionó", "ya se solucino", "ya está resuelto", "ya esta resuelto",
+	"ya quedó resuelto", "ya quedo resuelto", "ya regresó la luz", "ya regreso la luz",
+	"ya está normal", "ya esta normal", "ya volvió todo", "ya volvio todo",
+];
+
+const fallasGroupDebounceKey = (phone: string) => `bot:fallas_group_debounce:${phone}`;
+const groupReportPendingKey = (phone: string) => `bot:group_report_pending:${phone}`;
+const fallasGroupTimers = new Map<string, NodeJS.Timeout>();
+
+interface GroupReportPending {
+	email?: string;
+	reason: string;
+	formStatus: "yes" | "no" | "unknown";
+	senderName: string;
+}
+
+function extractGroupMessageText(msg: any): string {
+	return msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
+}
+
+/** El participante de un grupo puede venir como @lid; participantPn trae el teléfono real. */
+function resolveFallasGroupSenderPhone(msg: any): string | undefined {
+	const participantPn = msg.key?.participantPn as string | undefined;
+	if (participantPn) return participantPn.replace(/\D/g, "");
+	const participant = msg.key?.participant as string | undefined;
+	if (!participant) return undefined;
+	if (participant.endsWith("@s.whatsapp.net")) return participant.replace(/\D/g, "");
+	if (participant.endsWith("@lid")) {
+		const mapped = lidToPhoneJid.get(participant);
+		if (mapped) return mapped.replace(/\D/g, "");
+	}
+	return undefined;
+}
+
+/** Detecta si mencionan haber llenado (o no) el formulario/archivo de desconexión. */
+function detectFormStatus(text: string): "yes" | "no" | "unknown" {
+	const lower = text.toLowerCase();
+	if (!/formulario|archivo/.test(lower)) return "unknown";
+	const negative = /no\s+(me\s+dej[oó]|pud[eo]|me\s+permiti[oó]|(lo\s+)?(llen[eé]|complet[eé]))/.test(lower);
+	return negative ? "no" : "yes";
+}
+
+function isResolvedReportMessage(text: string): boolean {
+	const lower = text.toLowerCase();
+	return RESOLVED_REPORT_KEYWORDS.some((kw) => lower.includes(kw));
+}
 
 // Pending intent system: when any handler finds no profile it saves the intent
 // type so that tryRegisterEmailReply can chain back to the right flow.
@@ -736,6 +808,166 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 	}
 }
 
+/**
+ * Se llama una vez vencida la ventana de debounce de un reporte en el grupo de fallas.
+ * Junta los mensajes acumulados del mismo agente, intenta resolver el correo (del texto
+ * o del perfil ya vinculado a ese número) y le abre la conversación por privado para
+ * confirmar antes de tocar nada. Siempre avisa a Telegram, confirme o no el agente.
+ */
+async function processFallasGroupReport(phone: string, senderName: string): Promise<void> {
+	const debounceKey = fallasGroupDebounceKey(phone);
+	const raw = await redisClient.get(debounceKey);
+	await redisClient.del(debounceKey);
+	if (!raw) return;
+
+	const parts: string[] = JSON.parse(raw);
+	const reason = parts.join(" ").trim();
+	if (!reason) return;
+
+	const emailMatch = reason.match(EMAIL_REGEX);
+	const profile = await getAgentProfile(phone);
+	const email = (emailMatch ? emailMatch[0].toLowerCase() : undefined) || profile?.email;
+	const formStatus = detectFormStatus(reason);
+
+	try {
+		await notifyGroupFailureReport({ phone, senderName, email, reason, formStatus, resolved: false });
+	} catch (err) {
+		console.error("[fallas-group] Error notificando a Telegram:", err);
+	}
+
+	const pending: GroupReportPending = { email, reason, formStatus, senderName };
+	await redisClient.set(groupReportPendingKey(phone), JSON.stringify(pending), "EX", GROUP_REPORT_PENDING_TTL);
+
+	if (!(globalSock && isSocketConnected)) return;
+
+	const formNote = formStatus === "yes" ? "✅ sí" : formStatus === "no" ? "⚠️ no" : "no detectado";
+	const recap = [
+		"Vi tu reporte en el grupo de fallas 👀",
+		email ? `Correo: ${email}` : "No identifiqué tu correo — respondé acá con tu correo corporativo para poder gestionarlo.",
+		`Motivo: ${reason.slice(0, 300)}`,
+		`Formulario de desconexión: ${formNote}`,
+		email ? '¿Es correcto? Respondé "sí" para que te cambie a *Fuera de línea*.' : "",
+	].filter(Boolean).join("\n");
+
+	try {
+		await globalSock.sendMessage(`${phone}@s.whatsapp.net`, { text: recap });
+	} catch (err) {
+		console.error(`[fallas-group] No se pudo enviar el DM de confirmación a ${phone}:`, err);
+	}
+}
+
+/** Detecta un mensaje del grupo de fallas y programa su procesamiento agregado por agente. */
+async function handleFallasGroupMessage(msg: any): Promise<void> {
+	const text = extractGroupMessageText(msg).trim();
+	if (!text) return;
+
+	const phone = resolveFallasGroupSenderPhone(msg);
+	if (!phone) return;
+
+	const senderName = (msg.pushName as string) || phone;
+
+	if (isResolvedReportMessage(text)) {
+		// Limpiar cualquier confirmación pendiente: ya se resolvió solo, no tiene sentido
+		// procesar un "sí" desactualizado contra un reporte que ya no aplica.
+		await redisClient.del(groupReportPendingKey(phone));
+		try {
+			await notifyGroupFailureReport({ phone, senderName, reason: text, formStatus: "unknown", resolved: true });
+		} catch (err) {
+			console.error("[fallas-group] Error notificando resolución a Telegram:", err);
+		}
+		return;
+	}
+
+	// Solo arranca una acumulación nueva si el mensaje en sí menciona una falla. Si ya hay
+	// un reporte en curso para este agente, cualquier mensaje suyo se suma (correo, LOB,
+	// "ayuda", etc.) aunque no repita la palabra clave — así no se pierde info repartida
+	// en varios mensajes seguidos.
+	const lower = text.toLowerCase();
+	const hasFailureKeyword = OFFLINE_KEYWORDS.some((kw) => lower.includes(kw));
+	const hasActiveReport = fallasGroupTimers.has(phone);
+	if (!hasFailureKeyword && !hasActiveReport) return;
+
+	const debounceKey = fallasGroupDebounceKey(phone);
+	const raw = await redisClient.get(debounceKey);
+	const accumulated: string[] = raw ? JSON.parse(raw) : [];
+	accumulated.push(text);
+	await redisClient.set(debounceKey, JSON.stringify(accumulated), "EX", FALLAS_GROUP_DEBOUNCE_TTL);
+
+	if (hasActiveReport) return; // ya hay un timer corriendo, este mensaje solo se acumula
+	const timer = setTimeout(() => {
+		fallasGroupTimers.delete(phone);
+		processFallasGroupReport(phone, senderName).catch((err) =>
+			console.error("[fallas-group] Error procesando reporte agregado:", err),
+		);
+	}, FALLAS_GROUP_DEBOUNCE_MS);
+	fallasGroupTimers.set(phone, timer);
+}
+
+/**
+ * Atiende la respuesta por DM a la confirmación que se envió tras un reporte en el grupo
+ * de fallas. Tiene prioridad sobre el resto de los intents mientras esté pendiente.
+ */
+async function tryHandleGroupReportConfirmation(phone: string, message: string): Promise<string | null> {
+	const raw = await redisClient.get(groupReportPendingKey(phone));
+	if (!raw) return null;
+	const pending: GroupReportPending = JSON.parse(raw);
+
+	const emailMatch = message.match(EMAIL_REGEX);
+	if (!pending.email && emailMatch) {
+		pending.email = emailMatch[0].toLowerCase();
+		await redisClient.set(groupReportPendingKey(phone), JSON.stringify(pending), "EX", GROUP_REPORT_PENDING_TTL);
+		return buildDirectReply(
+			`Correo: ${pending.email}`,
+			`Motivo: ${pending.reason}`,
+			'¿Es correcto? Respondé "sí" para que te cambie a *Fuera de línea*.',
+		);
+	}
+
+	const trimmedLower = message.trim().toLowerCase();
+	const isConfirmation = /^(s[ií]|correcto|as[ií] es|exacto|eso es|confirmo)\b/.test(trimmedLower);
+	const isNegative = /^(no|negativo)\b/.test(trimmedLower);
+
+	if (isConfirmation) {
+		if (!pending.email) {
+			return buildDirectReply("Antes necesito tu correo corporativo 📧 para poder gestionar el cambio.");
+		}
+		const settings = await getSettings();
+		const spreadsheetId = (settings.offline_queue_sheet_id as string) || "";
+		await redisClient.del(groupReportPendingKey(phone));
+		if (!spreadsheetId) {
+			return buildDirectReply("La función de cambio de estado no está configurada. Contactá al TL.");
+		}
+		try {
+			const queued = await queueAgentOffline(pending.email, `${pending.reason} (reportado en grupo de fallas)`, spreadsheetId);
+			if (queued) {
+				return buildDirectReply(
+					"✅ Listo",
+					"Voy a cambiarte a *Fuera de línea* en los próximos 1-3 minutos.",
+					"Si tenés chats activos esperá a que el sistema procese el cambio.",
+				);
+			}
+			return buildDirectReply("No pude registrar la solicitud en este momento. Contactá al TL.");
+		} catch (err) {
+			console.error("[fallas-group] Error confirmando offline:", err);
+			return buildDirectReply("Ocurrió un error al registrar tu solicitud. Intentá de nuevo en unos minutos.");
+		}
+	}
+
+	if (isNegative) {
+		await redisClient.del(groupReportPendingKey(phone));
+		return buildDirectReply("Ok, no hago nada. Si necesitás algo escribime directamente acá 🙏");
+	}
+
+	// Cualquier otro texto se toma como una corrección del motivo.
+	pending.reason = message.trim() || pending.reason;
+	await redisClient.set(groupReportPendingKey(phone), JSON.stringify(pending), "EX", GROUP_REPORT_PENDING_TTL);
+	return buildDirectReply(
+		pending.email ? `Correo: ${pending.email}` : "Todavía no tengo tu correo corporativo.",
+		`Motivo actualizado: ${pending.reason}`,
+		'¿Es correcto? Respondé "sí" para continuar.',
+	);
+}
+
 async function tryRegisterEmailReply(phone: string, message: string): Promise<string | null> {
 	const emailMatch = message.match(EMAIL_REGEX);
 	if (!emailMatch) return null;
@@ -931,6 +1163,13 @@ export const inboundHandler = createInboundHandler({
 			const isGroup = conv?.jid?.endsWith("@g.us") ?? false;
 
 			if (!isGroup) {
+				// Confirmación de un reporte capturado en el grupo de fallas — tiene prioridad
+				// sobre cualquier otro intent mientras esté pendiente (le acabamos de preguntar algo puntual).
+				if (conv) {
+					const groupReportReply = await tryHandleGroupReportConfirmation(conv.phone, lastUserMsg);
+					if (groupReportReply) return groupReportReply;
+				}
+
 				// Email registration always works regardless of BigQuery config.
 				// Also check queued messages: if the email arrived in the same debounce batch as
 				// another intent (e.g. user sent email then immediately "eliminar ausencia"), save
@@ -1519,6 +1758,14 @@ export async function startWASocket() {
 					} catch (err) {
 						console.error(`[bot-error] Falló al establecer sesión de Signal para ${remoteJid}:`, err);
 					}
+				}
+			}
+
+			if (!msg.key.fromMe && msg.key?.remoteJid === FALLAS_GROUP_JID) {
+				try {
+					await handleFallasGroupMessage(msg);
+				} catch (err) {
+					console.error("[fallas-group] Error procesando mensaje del grupo de fallas:", err);
 				}
 			}
 		}

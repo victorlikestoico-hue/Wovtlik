@@ -40,6 +40,15 @@ export interface AppointmentReminderNotificationInput {
 	description: string | null;
 }
 
+export interface GroupFailureReportNotificationInput {
+	phone: string;
+	senderName: string;
+	email?: string;
+	reason: string;
+	formStatus: "yes" | "no" | "unknown";
+	resolved: boolean;
+}
+
 export type TelegramNotificationResult =
 	| {
 			ok: true;
@@ -113,6 +122,24 @@ export function formatAppointmentReminderNotification(
 	].filter(Boolean).join("\n");
 }
 
+export function formatGroupFailureReportNotification(
+	input: GroupFailureReportNotificationInput,
+): string {
+	const formLabel = input.formStatus === "yes"
+		? "✅ sí"
+		: input.formStatus === "no"
+			? "⚠️ no"
+			: "no mencionado";
+
+	return [
+		input.resolved ? "✅ <b>Falla reportada como resuelta</b>" : "🚨 <b>Reporte de falla (grupo)</b>",
+		`Agente: ${escapeHtml(input.senderName)} (${escapeHtml(input.phone)})`,
+		input.email ? `Correo: ${escapeHtml(input.email)}` : "Correo: no identificado",
+		`Motivo: ${escapeHtml(input.reason)}`,
+		input.resolved ? "" : `Formulario de desconexión: ${formLabel}`,
+	].filter(Boolean).join("\n");
+}
+
 export function createTelegramNotifier(config: TelegramNotifierConfig) {
 	async function sendText(text: string): Promise<TelegramNotificationResult> {
 		if (!hasConfig(config)) {
@@ -170,6 +197,9 @@ export function createTelegramNotifier(config: TelegramNotifierConfig) {
 		},
 		notifyAppointmentReminder(input: AppointmentReminderNotificationInput) {
 			return sendText(formatAppointmentReminderNotification(input));
+		},
+		notifyGroupFailureReport(input: GroupFailureReportNotificationInput) {
+			return sendText(formatGroupFailureReportNotification(input));
 		},
 	};
 }

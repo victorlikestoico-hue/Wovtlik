@@ -620,6 +620,27 @@ export async function notifyTelegramHumanNeeded(input: {
 	});
 }
 
+// notifyGroupFailureReport
+export async function notifyGroupFailureReport(input: {
+	phone: string;
+	senderName: string;
+	email?: string;
+	reason: string;
+	formStatus: "yes" | "no" | "unknown";
+	resolved: boolean;
+}): Promise<void> {
+	const botToken = process.env.TELEGRAM_BOT_TOKEN;
+	const chatId = process.env.TELEGRAM_CHAT_ID;
+
+	const notifier = createTelegramNotifier({
+		botToken,
+		chatId,
+		fetch: globalThis.fetch as any,
+	});
+
+	await notifier.notifyGroupFailureReport(input);
+}
+
 // 24. updateConversation(id, patch)
 export async function updateConversation(
 	id: number,
