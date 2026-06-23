@@ -47,9 +47,11 @@ import {
 	getAgentProfile,
 	getAgentProfileByEmail,
 	saveAgentProfile,
+	saveCrmTask,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
 import { getAgentSchedule, clearAgentAbsence, queueAgentOffline } from "../sheets-client.ts";
+import { createCalendarEvent } from "../google-calendar-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
 
@@ -121,6 +123,12 @@ const OFFLINE_KEYWORDS = [
 	"problemas de conexión", "problemas de conexion", "se me fue la señal",
 ];
 
+const APPOINTMENT_KEYWORDS = [
+	"agendar cita", "agendar una cita", "programar cita", "programar una cita",
+	"crear cita", "agendar visita", "agendar reunion", "agendar reunión",
+	"agendame", "agendarme", "agendar con", "cita con", "reservar cita",
+];
+
 const ABSENCE_KEYWORDS = [
 	"eliminar ausente", "eliminar mi ausente", "quitar ausente", "quitar mi ausente",
 	"borrar ausente", "borrar mi ausente", "me marcaron ausente",
@@ -137,9 +145,21 @@ const ABSENCE_KEYWORDS = [
 
 // Pending intent system: when any handler finds no profile it saves the intent
 // type so that tryRegisterEmailReply can chain back to the right flow.
-type PendingIntent = "absence" | "absence_date" | "offline" | "offline_reason" | "schedule" | "metrics";
+type PendingIntent =
+	| "absence" | "absence_date" | "offline" | "offline_reason" | "schedule" | "metrics"
+	| "appointment" | "appointment_phone" | "appointment_date" | "appointment_time" | "appointment_name";
 const pendingIntentKey = (phone: string) => `bot:pending_intent:${phone}`;
 const PENDING_INTENT_TTL = 300; // 5 minutes
+
+// Acumula los datos parciales de una cita en construcción durante el flujo multi-turno.
+interface AppointmentPartial {
+	clientPhone?: string;
+	dateISO?: string;
+	hour?: number;
+	minute?: number;
+	clientName?: string;
+}
+const pendingAppointmentDataKey = (phone: string) => `bot:pending_appointment:${phone}`;
 
 // Legacy alias kept for the absence date follow-up check (multi-turn)
 const absencePendingKey = (phone: string) => pendingIntentKey(phone);
@@ -311,6 +331,184 @@ function parseDateFromMessage(text: string): string | undefined {
 	return undefined;
 }
 
+/** Parse a time from the message and return {hour, minute}, or undefined if none found */
+function parseTimeFromMessage(text: string): { hour: number; minute: number } | undefined {
+	const lower = text.toLowerCase();
+
+	// HH:mm (24h) — "15:00", "9:30"
+	let m = lower.match(/\b(\d{1,2}):(\d{2})\b/);
+	if (m) {
+		const hour = parseInt(m[1], 10);
+		const minute = parseInt(m[2], 10);
+		if (hour <= 23 && minute <= 59) return { hour, minute };
+	}
+
+	// "3pm" / "3 pm" / "3:30pm"
+	m = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
+	if (m) {
+		let hour = parseInt(m[1], 10) % 12;
+		const minute = m[2] ? parseInt(m[2], 10) : 0;
+		if (m[3] === "pm") hour += 12;
+		return { hour, minute };
+	}
+
+	// "a las 3" / "a las 3 de la tarde" / "3 de la tarde" / "3 de la mañana"
+	m = lower.match(/\b(?:a las\s+)?(\d{1,2})\s*(?:de la (tarde|noche|ma[nñ]ana))?\b/);
+	if (m && /\b(a las|de la tarde|de la noche|de la ma[nñ]ana)\b/.test(lower)) {
+		let hour = parseInt(m[1], 10);
+		const period = m[2];
+		if ((period === "tarde" || period === "noche") && hour < 12) hour += 12;
+		return { hour: hour % 24, minute: 0 };
+	}
+
+	return undefined;
+}
+
+/** Extrae el teléfono del cliente de un mensaje de agendamiento (7-15 dígitos corridos) */
+function parseClientPhoneFromMessage(text: string): string | undefined {
+	const m = text.match(/\b(\+?\d{7,15})\b/);
+	return m ? m[1].replace(/\D/g, "") : undefined;
+}
+
+async function stashAppointmentPartial(phone: string, message: string): Promise<AppointmentPartial> {
+	const raw = await redisClient.get(pendingAppointmentDataKey(phone));
+	const partial: AppointmentPartial = raw ? JSON.parse(raw) : {};
+
+	if (!partial.clientPhone) {
+		const clientPhone = parseClientPhoneFromMessage(message);
+		if (clientPhone) partial.clientPhone = clientPhone;
+	}
+	if (!partial.dateISO) {
+		const dateISO = parseDateFromMessage(message);
+		if (dateISO) partial.dateISO = dateISO;
+	}
+	if (partial.hour === undefined) {
+		const time = parseTimeFromMessage(message);
+		if (time) {
+			partial.hour = time.hour;
+			partial.minute = time.minute;
+		}
+	}
+	if (!partial.clientName) {
+		// Una vez removidos teléfono/fecha/hora del texto, lo que queda es el nombre/motivo.
+		const remainder = message
+			.replace(/\b(\+?\d{7,15})\b/, "")
+			.replace(/\b(\d{1,2})[\/\-](\d{1,2})([\/\-](\d{4}))?\b/, "")
+			.replace(/\b(\d{1,2}):(\d{2})\b/, "")
+			.replace(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i, "")
+			.replace(/\b(?:a las\s+)?\d{1,2}\s*(?:de la (?:tarde|noche|ma[nñ]ana))\b/i, "")
+			.replace(/\ba las\s+\d{1,2}\b/i, "")
+			.replace(/\b(agendar|programar|crear|reservar)\b.*?\b(cita|visita|reunion|reunión)\b/i, "")
+			.replace(/\bcon\b/i, "")
+			.replace(/\bma[nñ]ana\b/i, "")
+			.replace(/\bhoy\b/i, "")
+			.replace(/[,.]/g, " ")
+			.replace(/\s+/g, " ")
+			.trim();
+		if (remainder.length >= 2) partial.clientName = remainder.slice(0, 140);
+	}
+
+	await redisClient.set(pendingAppointmentDataKey(phone), JSON.stringify(partial), "EX", PENDING_INTENT_TTL);
+	return partial;
+}
+
+async function clearAppointmentState(phone: string): Promise<void> {
+	await redisClient.del(pendingIntentKey(phone));
+	await redisClient.del(pendingAppointmentDataKey(phone));
+}
+
+async function finalizeAppointment(
+	phone: string,
+	profile: { phone: string; email: string },
+	partial: Required<AppointmentPartial>,
+): Promise<string> {
+	const settings = await getSettings();
+	const durationMinutes = Number(settings.appointment_duration_minutes ?? 30);
+	const calendarId = (settings.appointments_calendar_id as string) || "";
+	const refreshToken = (settings.google_oauth_refresh_token as string) || "";
+
+	const [year, month, day] = partial.dateISO.split("-").map((p) => parseInt(p, 10));
+	const pad = (n: number) => String(n).padStart(2, "0");
+	const startLocal = `${year}-${pad(month)}-${pad(day)}T${pad(partial.hour)}:${pad(partial.minute)}:00`;
+	const appointmentAt = new Date(`${startLocal}-03:00`); // Argentina (UTC-3, sin DST actual)
+
+	let calendarEventId: string | null = null;
+	if (calendarId && refreshToken) {
+		const endDate = new Date(appointmentAt.getTime() + durationMinutes * 60_000);
+		const endLocal = endDate.toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" }).replace(" ", "T");
+		const event = await createCalendarEvent({
+			calendarId,
+			summary: `Cita con ${partial.clientName}`,
+			description: `Agendada por ${profile.email} vía WhatsApp.`,
+			startISO: startLocal,
+			endISO: endLocal,
+			refreshToken,
+		});
+		calendarEventId = event?.id ?? null;
+	}
+
+	const clientJid = `${partial.clientPhone}@s.whatsapp.net`;
+	const conversation = await getOrCreateConversation(partial.clientPhone, clientJid, partial.clientName);
+
+	await saveCrmTask({
+		task_type: "appointment",
+		title: `Cita con ${partial.clientName}`,
+		description: `Agendada por ${profile.email}`,
+		conversation_id: conversation.id,
+		agent_phone: phone,
+		calendar_event_id: calendarEventId,
+		appointment_at: appointmentAt,
+		due_at: appointmentAt,
+	});
+
+	await clearAppointmentState(phone);
+
+	const fechaLegible = appointmentAt.toLocaleString("es-AR", {
+		timeZone: "America/Argentina/Buenos_Aires",
+		dateStyle: "short",
+		timeStyle: "short",
+	});
+
+	return buildDirectReply(
+		"✅ Cita agendada",
+		`Cliente: ${partial.clientName} (${partial.clientPhone})`,
+		`Fecha: ${fechaLegible}${calendarEventId ? " · agregada al calendario" : ""}`,
+	);
+}
+
+async function tryScheduleAppointmentReply(phone: string, message: string): Promise<string | null> {
+	const profile = await getAgentProfile(phone);
+	if (!profile) {
+		await redisClient.set(pendingIntentKey(phone), "appointment", "EX", PENDING_INTENT_TTL);
+		await stashAppointmentPartial(phone, message);
+		return buildDirectReply(
+			"Para agendar una cita necesito tu email corporativo 📧",
+			'Respondé con tu email, ej: "luis@pedidosya.com"',
+		);
+	}
+
+	const partial = await stashAppointmentPartial(phone, message);
+
+	if (!partial.clientPhone) {
+		await redisClient.set(pendingIntentKey(phone), "appointment_phone", "EX", PENDING_INTENT_TTL);
+		return buildDirectReply("¿Cuál es el número de WhatsApp del cliente?", 'Ej: "5512345678"');
+	}
+	if (!partial.dateISO) {
+		await redisClient.set(pendingIntentKey(phone), "appointment_date", "EX", PENDING_INTENT_TTL);
+		return buildDirectReply("¿Para qué fecha es la cita?", 'Ej: "mañana" o "25/06/2026"');
+	}
+	if (partial.hour === undefined) {
+		await redisClient.set(pendingIntentKey(phone), "appointment_time", "EX", PENDING_INTENT_TTL);
+		return buildDirectReply("¿A qué hora?", 'Ej: "15:00" o "3pm"');
+	}
+	if (!partial.clientName) {
+		await redisClient.set(pendingIntentKey(phone), "appointment_name", "EX", PENDING_INTENT_TTL);
+		return buildDirectReply("¿Nombre del cliente o motivo de la cita?", 'Ej: "Juan Pérez, presupuesto"');
+	}
+
+	return await finalizeAppointment(phone, profile, partial as Required<AppointmentPartial>);
+}
+
 async function tryRemoveAbsenceReply(phone: string, message: string): Promise<string | null> {
 	const profile = await getAgentProfile(phone);
 	if (!profile) {
@@ -478,6 +676,15 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 				);
 			}
 
+			if (pending === "appointment") {
+				await redisClient.del(pendingIntentKey(phone));
+				const reply = await tryScheduleAppointmentReply(phone, "");
+				return reply ?? buildDirectReply(
+					`✅ Tu email *${email}* ya está registrado.`,
+					`Podés pedir: ${capabilities}`,
+				);
+			}
+
 			return buildDirectReply(
 				`✅ Tu email *${email}* ya está registrado.`,
 				`Con él podés pedir: ${capabilities}.`,
@@ -542,6 +749,15 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 			`✅ Email registrado: *${email}*`,
 			`Podés pedir: ${capabilities}`,
 			'Para pasarte a offline ahora respondé con el motivo, ej: "internet caído".',
+		);
+	}
+
+	if (pending === "appointment") {
+		await redisClient.del(pendingIntentKey(phone));
+		const reply = await tryScheduleAppointmentReply(phone, "");
+		return reply ?? buildDirectReply(
+			`✅ Email registrado: *${email}*`,
+			`Podés pedir: ${capabilities}`,
 		);
 	}
 
@@ -633,6 +849,15 @@ export const inboundHandler = createInboundHandler({
 				// Schedule intent (Google Sheets)
 				if (SCHEDULE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
 					const reply = await tryScheduleReply(conv.phone);
+					if (reply) return reply;
+				}
+
+				// Appointment scheduling intent (Google Calendar + recordatorios)
+				// También cubre los turnos siguientes mientras se completan los datos de la cita.
+				const pendingAppointment = conv ? await redisClient.get(pendingIntentKey(conv.phone)) : null;
+				const isAppointmentFollowUp = typeof pendingAppointment === "string" && pendingAppointment.startsWith("appointment");
+				if ((APPOINTMENT_KEYWORDS.some((kw) => msgLower.includes(kw)) || isAppointmentFollowUp) && conv) {
+					const reply = await tryScheduleAppointmentReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
 				}
 

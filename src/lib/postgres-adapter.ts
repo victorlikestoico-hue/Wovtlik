@@ -51,6 +51,16 @@ ALTER TABLE conversations ADD COLUMN IF NOT EXISTS lid_jid TEXT UNIQUE;
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS media_type TEXT CHECK(media_type IN ('text','image','audio','unknown')) NOT NULL DEFAULT 'text';
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS media_url TEXT;
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS agent_phone TEXT;
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS calendar_event_id TEXT;
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS appointment_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE crm_tasks DROP CONSTRAINT IF EXISTS crm_tasks_task_type_check;
+ALTER TABLE crm_tasks ADD CONSTRAINT crm_tasks_task_type_check
+  CHECK(task_type IN ('call_client','follow_up','evaluate_lead','set_label','custom','appointment'));
+CREATE INDEX IF NOT EXISTS idx_crm_tasks_appointment_pending
+  ON crm_tasks(appointment_at)
+  WHERE task_type = 'appointment' AND reminder_sent_at IS NULL;
 INSERT INTO whatsapp_instances (name, phone, status, qr_string, is_active, created_at, updated_at)
 SELECT 'Principal', cs.phone, COALESCE(cs.status, 'disconnected'), cs.qr_string, TRUE, NOW(), NOW()
 FROM connection_state cs

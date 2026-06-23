@@ -125,7 +125,11 @@ INSERT INTO settings (key, value) VALUES
   ('dashbig_reports_enabled', 'false'::jsonb), ('dashbig_report_hour', '"09:00"'::jsonb),
   ('dashbig_webapp_url', '""'::jsonb), ('dashbig_api_key', '""'::jsonb),
   ('programacion_1_id', '"1NrZfcE5z0mfg_LthrAtf0wlgYbqiBQ_tlF085GElkyc"'::jsonb),
-  ('programacion_2_id', '"1UqRuXwkd_NOx59eWX5oteCPRJqRHNvl894GvZyj-vGo"'::jsonb)
+  ('programacion_2_id', '"1UqRuXwkd_NOx59eWX5oteCPRJqRHNvl894GvZyj-vGo"'::jsonb),
+  ('appointments_calendar_id', '""'::jsonb),
+  ('appointment_reminder_lead_minutes', '60'::jsonb),
+  ('appointment_duration_minutes', '30'::jsonb),
+  ('google_oauth_refresh_token', '""'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 CREATE TABLE IF NOT EXISTS agent_profiles (
   phone TEXT PRIMARY KEY,

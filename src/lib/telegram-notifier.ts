@@ -30,6 +30,16 @@ export interface FollowupBlockedNotificationInput {
 	reason: string;
 }
 
+export interface AppointmentReminderNotificationInput {
+	conversationId: number;
+	clientPhone: string;
+	clientName: string;
+	agentEmail: string;
+	agentPhone: string;
+	appointmentAt: string;
+	description: string | null;
+}
+
 export type TelegramNotificationResult =
 	| {
 			ok: true;
@@ -91,6 +101,18 @@ export function formatFollowupBlockedNotification(
 	].join("\n");
 }
 
+export function formatAppointmentReminderNotification(
+	input: AppointmentReminderNotificationInput,
+): string {
+	return [
+		"📅 <b>Recordatorio de cita</b>",
+		`Cliente: ${escapeHtml(input.clientName)} (${escapeHtml(input.clientPhone)})`,
+		`Agente: ${escapeHtml(input.agentEmail)} (${escapeHtml(input.agentPhone)})`,
+		`Hora: ${escapeHtml(input.appointmentAt)}`,
+		input.description ? `Detalle: ${escapeHtml(input.description)}` : "",
+	].filter(Boolean).join("\n");
+}
+
 export function createTelegramNotifier(config: TelegramNotifierConfig) {
 	async function sendText(text: string): Promise<TelegramNotificationResult> {
 		if (!hasConfig(config)) {
@@ -145,6 +167,9 @@ export function createTelegramNotifier(config: TelegramNotifierConfig) {
 		},
 		notifyFollowupBlocked(input: FollowupBlockedNotificationInput) {
 			return sendText(formatFollowupBlockedNotification(input));
+		},
+		notifyAppointmentReminder(input: AppointmentReminderNotificationInput) {
+			return sendText(formatAppointmentReminderNotification(input));
 		},
 	};
 }

@@ -8,6 +8,7 @@ import {
 } from "../src/lib/runtime-paths.ts";
 import { startFollowupsCron } from "./followups-cron.ts";
 import { startDashBigReportsCron } from "./dashbig-reports-cron.ts";
+import { startAppointmentsCron } from "./appointments-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -23,6 +24,9 @@ async function main() {
 
 	// Reportes automáticos de DashBig por WhatsApp
 	startDashBigReportsCron();
+
+	// Recordatorios de citas agendadas (cliente, agente y Telegram)
+	startAppointmentsCron();
 
 	// Loop de polling para la desconexión / reinicio manual controlado desde el frontend
 	setInterval(async () => {

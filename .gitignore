@@ -13,3 +13,11 @@ tsconfig.tsbuildinfo
 data/
 /auth/
 .env.local
+
+# Credenciales OAuth descargadas desde Google Cloud Console
+client_secret_*.json
+
+# Notas y logs locales
+logs.txt
+pasos.txt
+*.lnk

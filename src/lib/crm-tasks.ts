@@ -10,6 +10,7 @@ export const CRM_TASK_TYPES = [
 	"evaluate_lead",
 	"set_label",
 	"custom",
+	"appointment",
 ] as const;
 export const CRM_TASK_PRIORITIES = ["low", "medium", "high"] as const;
 
@@ -26,6 +27,9 @@ export interface CrmTaskInput {
 	lead_label: LeadLabel | null;
 	priority: CrmTaskPriority;
 	due_at: Date | null;
+	agent_phone: string | null;
+	calendar_event_id: string | null;
+	appointment_at: Date | null;
 }
 
 export interface CrmTaskPatch {
@@ -37,6 +41,9 @@ export interface CrmTaskPatch {
 	lead_label?: LeadLabel | null;
 	priority?: CrmTaskPriority;
 	due_at?: Date | null;
+	agent_phone?: string | null;
+	calendar_event_id?: string | null;
+	appointment_at?: Date | null;
 }
 
 export interface CrmTaskRow {
@@ -49,6 +56,10 @@ export interface CrmTaskRow {
 	lead_label: LeadLabel | null;
 	priority: CrmTaskPriority;
 	due_at: Date | null;
+	agent_phone: string | null;
+	calendar_event_id: string | null;
+	appointment_at: Date | null;
+	reminder_sent_at: Date | null;
 	created_at: Date;
 	updated_at: Date;
 }
@@ -97,6 +108,19 @@ function normalizeLeadLabel(value: unknown) {
 	return value;
 }
 
+function normalizePhone(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const digits = value.replace(/\D/g, "");
+	return digits.length > 0 ? digits : null;
+}
+
+function normalizeAppointmentAt(value: unknown) {
+	if (value === null || value === undefined || value === "") return null;
+	const date = value instanceof Date ? value : new Date(String(value));
+	if (Number.isNaN(date.getTime())) throw new Error("Invalid appointment date");
+	return date;
+}
+
 export function normalizeCrmTaskInput(input: Record<string, unknown>): CrmTaskInput {
 	const title = normalizeText(input.title, 140);
 	if (!title) throw new Error("Task title is required");
@@ -112,6 +136,9 @@ export function normalizeCrmTaskInput(input: Record<string, unknown>): CrmTaskIn
 			? input.priority
 			: "medium",
 		due_at: normalizeDueAt(input.due_at),
+		agent_phone: normalizePhone(input.agent_phone),
+		calendar_event_id: normalizeNullableText(input.calendar_event_id, 200),
+		appointment_at: normalizeAppointmentAt(input.appointment_at),
 	};
 }
 
@@ -146,6 +173,15 @@ export function normalizeCrmTaskPatch(input: Record<string, unknown>): CrmTaskPa
 	}
 	if ("due_at" in input) {
 		patch.due_at = normalizeDueAt(input.due_at);
+	}
+	if ("agent_phone" in input) {
+		patch.agent_phone = normalizePhone(input.agent_phone);
+	}
+	if ("calendar_event_id" in input) {
+		patch.calendar_event_id = normalizeNullableText(input.calendar_event_id, 200);
+	}
+	if ("appointment_at" in input) {
+		patch.appointment_at = normalizeAppointmentAt(input.appointment_at);
 	}
 
 	return patch;

@@ -750,8 +750,9 @@ export async function saveCrmTask(input: Record<string, unknown>): Promise<CrmTa
 	const res = await pool.query<CrmTaskRow>(
 		`INSERT INTO crm_tasks (
 		   conversation_id, title, description, status, task_type,
-		   lead_label, priority, due_at, created_at, updated_at
-		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+		   lead_label, priority, due_at, agent_phone, calendar_event_id, appointment_at,
+		   created_at, updated_at
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
 		 RETURNING *`,
 		[
 			normalized.conversation_id,
@@ -762,9 +763,62 @@ export async function saveCrmTask(input: Record<string, unknown>): Promise<CrmTa
 			normalized.lead_label,
 			normalized.priority,
 			normalized.due_at,
+			normalized.agent_phone,
+			normalized.calendar_event_id,
+			normalized.appointment_at,
 		],
 	);
 	return res.rows[0];
+}
+
+export async function markCrmTaskReminderSent(id: number): Promise<void> {
+	await ensureSchemaInitialized();
+	await pool.query("UPDATE crm_tasks SET reminder_sent_at = NOW() WHERE id = $1", [id]);
+}
+
+/** Silences reminders for appointments whose time already passed without being notified (e.g. bot was down). */
+export async function markMissedAppointmentReminders(): Promise<void> {
+	await ensureSchemaInitialized();
+	await pool.query(
+		`UPDATE crm_tasks
+		 SET reminder_sent_at = NOW()
+		 WHERE task_type = 'appointment'
+		   AND reminder_sent_at IS NULL
+		   AND appointment_at IS NOT NULL
+		   AND appointment_at <= NOW()`,
+	);
+}
+
+export interface PendingAppointmentReminderRow {
+	id: number;
+	title: string;
+	description: string | null;
+	appointment_at: Date;
+	agent_phone: string | null;
+	conversation_id: number | null;
+	client_phone: string | null;
+	client_name: string | null;
+}
+
+export async function getPendingAppointmentReminders(
+	leadMinutes: number,
+): Promise<PendingAppointmentReminderRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<PendingAppointmentReminderRow>(
+		`SELECT t.id, t.title, t.description, t.appointment_at, t.agent_phone,
+		        c.id AS conversation_id, c.phone AS client_phone, c.name AS client_name
+		 FROM crm_tasks t
+		 LEFT JOIN conversations c ON c.id = t.conversation_id
+		 WHERE t.task_type = 'appointment'
+		   AND t.reminder_sent_at IS NULL
+		   AND t.appointment_at IS NOT NULL
+		   AND t.appointment_at <= NOW() + ($1 * INTERVAL '1 minute')
+		   AND t.appointment_at > NOW()
+		 ORDER BY t.appointment_at ASC
+		 LIMIT 50`,
+		[leadMinutes],
+	);
+	return res.rows;
 }
 
 export async function updateCrmTask(
