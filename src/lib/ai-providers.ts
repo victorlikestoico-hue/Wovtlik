@@ -324,6 +324,53 @@ function requireProvider(provider: AiProviderSettings, capability: ProviderCapab
 	}
 }
 
+/** Pide al proveedor de chat configurado un texto libre (sin esquema JSON), para mensajes creativos. */
+export async function generateCreativeText(
+	prompt: string,
+	settings: Record<string, unknown>,
+): Promise<string> {
+	const providerName = providerFor("chat", settings);
+	const provider = providerSettingsFor("chat", settings);
+	requireProvider(provider, "chat");
+
+	if (providerName === "google") {
+		const response = await fetch(
+			`${provider.baseUrl}/models/${provider.model}:generateContent?key=${encodeURIComponent(provider.apiKey)}`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					contents: [{ parts: [{ text: prompt }] }],
+					generationConfig: { temperature: 0.9 },
+				}),
+			},
+		);
+		if (!response.ok) throw new Error(`chat_ai_http_${response.status}`);
+		const payload = await response.json();
+		const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
+		if (typeof text !== "string" || !text.trim()) throw new Error("chat_ai_invalid_response");
+		return text.trim();
+	}
+
+	const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			authorization: `Bearer ${provider.apiKey}`,
+		},
+		body: JSON.stringify({
+			model: provider.model,
+			messages: [{ role: "user", content: prompt }],
+			temperature: 0.9,
+		}),
+	});
+	if (!response.ok) throw new Error(`chat_ai_http_${response.status}`);
+	const payload = await response.json();
+	const text = payload?.choices?.[0]?.message?.content;
+	if (typeof text !== "string" || !text.trim()) throw new Error("chat_ai_invalid_response");
+	return text.trim();
+}
+
 export async function transcribeAudio(input: {
 	buffer: Buffer;
 	mimeType?: string;

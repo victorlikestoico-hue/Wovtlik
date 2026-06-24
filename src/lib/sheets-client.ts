@@ -95,9 +95,9 @@ type RawSheet = {
 	rows: Array<{ rowIndex: number; cells: string[] }>; // rowIndex is 1-based spreadsheet row
 };
 
-async function readSheetRaw(spreadsheetId: string): Promise<RawSheet> {
+async function readNamedSheetRaw(spreadsheetId: string, sheetName: string): Promise<RawSheet> {
 	const token = await getAccessToken();
-	const range = encodeURIComponent(SHEET_NAME);
+	const range = encodeURIComponent(sheetName);
 	const res   = await fetch(
 		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`,
 		{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) },
@@ -113,6 +113,10 @@ async function readSheetRaw(spreadsheetId: string): Promise<RawSheet> {
 			cells:    cells.map(c => (c ?? "").trim()),
 		})),
 	};
+}
+
+async function readSheetRaw(spreadsheetId: string): Promise<RawSheet> {
+	return readNamedSheetRaw(spreadsheetId, SHEET_NAME);
 }
 
 // ─── Sheet write ──────────────────────────────────────────────────────────────
@@ -432,6 +436,63 @@ export async function getMonitorConfig(key: string, spreadsheetId: string): Prom
 	} catch {
 		return null;
 	}
+}
+
+const HORAS_CUBRIR_TAB = "horas-cubrir";
+
+export type HoraCubrirEntry = {
+	lob:           string;
+	horario:       string;
+	fecha:         string;
+	novedades:     string;
+	observaciones: string;
+	tipoGestion:   string;
+	idUnico:       string;
+};
+
+/** Lee las filas pendientes de la hoja "horas-cubrir" en una o más planillas (programaciones). */
+export async function getHorasCubrir(spreadsheetIds: string[]): Promise<HoraCubrirEntry[]> {
+	if (!SA_EMAIL || !SA_KEY) return [];
+	const seenIds = new Set<string>();
+	const results: HoraCubrirEntry[] = [];
+
+	for (const id of spreadsheetIds) {
+		if (!id) continue;
+		try {
+			const { headers, rows } = await readNamedSheetRaw(id, HORAS_CUBRIR_TAB);
+			const lobCol     = headers.findIndex(h => /^lob$/i.test(h));
+			const horarioCol = headers.findIndex(h => /^horarios?$/i.test(h));
+			const fechaCol   = headers.findIndex(h => /^fecha$/i.test(h));
+			const novedCol   = headers.findIndex(h => /^novedades$/i.test(h));
+			const obsCol     = headers.findIndex(h => /^observaciones$/i.test(h));
+			const tipoCol    = headers.findIndex(h => /^tipo\s*de\s*gesti[oó]n$/i.test(h));
+			const idCol      = headers.findIndex(h => /^id[_\s]?unico$/i.test(h));
+			if (horarioCol < 0) continue;
+
+			for (const { cells } of rows) {
+				const horario = cells[horarioCol] ?? "";
+				if (!horario) continue; // fila vacía
+				// Misma fila reflejada en ambas planillas (mismo id_unico) → no duplicar el anuncio.
+				const idUnico = idCol >= 0 ? (cells[idCol] ?? "") : "";
+				if (idUnico && seenIds.has(idUnico)) continue;
+				if (idUnico) seenIds.add(idUnico);
+
+				results.push({
+					lob:           lobCol   >= 0 ? (cells[lobCol]   ?? "") : "",
+					horario,
+					fecha:         fechaCol >= 0 ? (cells[fechaCol] ?? "") : "",
+					novedades:     novedCol >= 0 ? (cells[novedCol] ?? "") : "",
+					observaciones: obsCol   >= 0 ? (cells[obsCol]   ?? "") : "",
+					tipoGestion:   tipoCol  >= 0 ? (cells[tipoCol]  ?? "") : "",
+					idUnico,
+				});
+			}
+		} catch (err) {
+			console.error(`[sheets] Error leyendo horas-cubrir de ${id}:`, err);
+		}
+	}
+
+	return results;
 }
 
 /** Escribe (o crea) un valor en el tab Config de la planilla del Monitor. */

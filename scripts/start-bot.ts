@@ -11,6 +11,7 @@ import { startDashBigReportsCron } from "./dashbig-reports-cron.ts";
 import { startAppointmentsCron } from "./appointments-cron.ts";
 import { startOfflineResultsCron } from "./offline-results-cron.ts";
 import { startFallasTemplateCron } from "./fallas-template-cron.ts";
+import { startHorasCubrirCron } from "./horas-cubrir-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -36,6 +37,9 @@ async function main() {
 
 	// Recordatorio cada 2hs en el grupo de fallas de qué datos enviar (correo, motivo, formulario)
 	startFallasTemplateCron();
+
+	// Anuncio cada 1h en el grupo "Anuncios Horas CS" de los LOBs con horas extra sin cubrir
+	startHorasCubrirCron();
 
 	// Loop de polling para la desconexión / reinicio manual controlado desde el frontend
 	setInterval(async () => {
