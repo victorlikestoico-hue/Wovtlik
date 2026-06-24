@@ -53,10 +53,12 @@ const scheduler = createFollowUpScheduler({
 	},
 	sendWhatsAppMessage: async (jid, text) => {
 		const { globalSock } = await import("../src/lib/baileys/client.ts");
-		if (globalSock) {
+		// sock.user.id solo existe una vez autenticado; globalSock ya existe antes de eso
+		// y llamar sendMessage en ese punto rompe dentro de Baileys (authState.creds.me undefined).
+		if (globalSock?.user?.id) {
 			await globalSock.sendMessage(jid, { text });
 		} else {
-			throw new Error("[scheduler] WhatsApp socket no conectado.");
+			throw new Error("[scheduler] WhatsApp socket todavía no autenticado.");
 		}
 	},
 	notifyFollowupBlocked: async (input) => {

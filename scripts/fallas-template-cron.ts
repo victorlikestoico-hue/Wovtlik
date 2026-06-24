@@ -21,29 +21,39 @@ const FALLAS_TEMPLATE_MESSAGE = [
 	"Con esos 3 datos te confirmo por privado y gestiono el cambio a *Fuera de línea* más rápido. 🙏",
 ].join("\n");
 
-export async function runFallasTemplateCronOnce(): Promise<void> {
+// Reintento corto cuando el socket todavía no terminó de autenticarse (recién arrancado el proceso).
+// Sin esto, el primer tick tras cada reinicio choca con authState.creds.me aún sin definir
+// dentro de Baileys y el recordatorio nunca llega a enviarse hasta el próximo ciclo de 2hs.
+const FALLAS_TEMPLATE_NOT_READY_RETRY_MS = 30_000;
+
+export async function runFallasTemplateCronOnce(): Promise<"sent" | "skipped" | "not_ready" | "error"> {
 	try {
 		const alreadySent = await redisClient.get(FALLAS_TEMPLATE_COOLDOWN_KEY);
-		if (alreadySent) return;
+		if (alreadySent) return "skipped";
 
 		const { globalSock, FALLAS_GROUP_JID } = await import("../src/lib/baileys/client.ts");
-		if (!globalSock) {
-			console.warn("[fallas-template-cron] Socket no conectado, reintento en el próximo tick.");
-			return;
+		// sock.user.id solo existe una vez que la conexión terminó de autenticarse;
+		// globalSock por sí solo ya existe apenas se crea el socket, antes de eso.
+		if (!globalSock?.user?.id) {
+			console.warn("[fallas-template-cron] Socket todavía no autenticado, reintento en breve.");
+			return "not_ready";
 		}
 
 		await globalSock.sendMessage(FALLAS_GROUP_JID, { text: FALLAS_TEMPLATE_MESSAGE });
 		await redisClient.set(FALLAS_TEMPLATE_COOLDOWN_KEY, Date.now().toString(), "EX", FALLAS_TEMPLATE_COOLDOWN_SECONDS);
+		return "sent";
 	} catch (err) {
 		console.error("[fallas-template-cron] Error crítico ejecutando el tick:", err);
+		return "error";
 	}
 }
 
 export function startFallasTemplateCron(): void {
 	console.log("[fallas-template-cron] Iniciando loop del recordatorio de reporte de fallas (cada 2hs)...");
 	const tick = async () => {
-		await runFallasTemplateCronOnce();
-		setTimeout(tick, FALLAS_TEMPLATE_INTERVAL_MS);
+		const result = await runFallasTemplateCronOnce();
+		const delay = result === "not_ready" ? FALLAS_TEMPLATE_NOT_READY_RETRY_MS : FALLAS_TEMPLATE_INTERVAL_MS;
+		setTimeout(tick, delay);
 	};
 	tick();
 }

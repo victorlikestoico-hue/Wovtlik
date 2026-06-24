@@ -74,8 +74,10 @@ export async function runOfflineResultsCronOnce(): Promise<void> {
 			}
 
 			const { globalSock } = await import("../src/lib/baileys/client.ts");
-			if (!globalSock) {
-				console.warn(`[offline-results-cron] Socket no conectado, reintento en el próximo tick para ${row.email}.`);
+			// sock.user.id solo existe una vez autenticado; globalSock ya existe antes de eso
+			// y llamar sendMessage en ese punto rompe dentro de Baileys (authState.creds.me undefined).
+			if (!globalSock?.user?.id) {
+				console.warn(`[offline-results-cron] Socket todavía no autenticado, reintento en el próximo tick para ${row.email}.`);
 				continue; // no se marca como notificado: se reintenta en 30s
 			}
 

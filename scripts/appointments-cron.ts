@@ -43,12 +43,15 @@ export async function runAppointmentsCronOnce(): Promise<void> {
 
 				if (row.agent_phone) {
 					const { globalSock } = await import("../src/lib/baileys/client.ts");
-					if (globalSock) {
+					// sock.user.id solo existe una vez autenticado; globalSock ya existe antes de eso
+					// y llamar sendMessage en ese punto rompe dentro de Baileys (authState.creds.me undefined),
+					// lo que terminaría marcando el recordatorio como enviado sin haber avisado al agente.
+					if (globalSock?.user?.id) {
 						await globalSock.sendMessage(`${row.agent_phone}@s.whatsapp.net`, {
 							text: `📅 Recordatorio: tenés una cita con ${row.client_name ?? row.client_phone ?? "un cliente"} para ${appointmentLocal}.`,
 						});
 					} else {
-						console.warn(`[appointments-cron] Socket no conectado, no se pudo avisar al agente #${row.id}.`);
+						console.warn(`[appointments-cron] Socket todavía no autenticado, no se pudo avisar al agente #${row.id}.`);
 					}
 				}
 
