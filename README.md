@@ -65,16 +65,18 @@ Esto descargará las imágenes oficiales, compilará la aplicación Next.js y le
 
 ### Persistencia de WhatsApp en deploy
 
-La sesión de WhatsApp se guarda con Baileys en el directorio configurado por `WHATSAPP_AUTH_DIR` (`/app/auth` en Docker). Ese directorio **debe ser persistente**: si se borra o queda dentro de un contenedor efímero, WhatsApp va a pedir QR otra vez después de cada deploy.
+La sesión de WhatsApp se guarda con Baileys en el directorio configurado por `WHATSAPP_AUTH_DIR` (`/app/auth` en Docker). Ese directorio **es intencionalmente efímero** (no está en un volumen): cada redeploy/recreate del contenedor `app` pide un nuevo QR.
 
-El `docker-compose.yml` usa volúmenes nombrados para conservar credenciales y datos entre rebuilds/recreates:
+Esto es deliberado: si `/app/auth` se persiste en un volumen, un solape entre el contenedor viejo (terminando) y el nuevo (arrancando) durante el redeploy hace que dos procesos de Baileys se autentiquen con la misma identidad de dispositivo al mismo tiempo, lo cual WhatsApp interpreta como un dispositivo clonado y cierra **todas** las sesiones vinculadas de la cuenta (no solo el bot). Mantener `/app/auth` sin persistir hace ese conflicto imposible, a costa de tener que reescanear el QR después de cada deploy.
+
+`bot_data` y `whatsapp_media` sí siguen en volúmenes nombrados (no contienen credenciales de sesión, así que no tienen este riesgo):
 
 ```yaml
-whatsapp_auth:/app/auth
 bot_data:/app/data
+whatsapp_media:/app/public/media
 ```
 
-No borres esos volúmenes salvo que quieras desvincular WhatsApp manualmente. El botón de desconexión del dashboard es destructivo por diseño: elimina la sesión y fuerza un nuevo QR.
+No borres esos volúmenes salvo que quieras perder datos/medios del bot. El botón de desconexión del dashboard es destructivo por diseño: elimina la sesión y fuerza un nuevo QR.
 
 ---
 

@@ -40,7 +40,6 @@ services:
       - BOT_DATA_DIR=/app/data
       - LOG_LEVEL=${LOG_LEVEL:-warn}
     volumes:
-      - whatsapp_auth:/app/auth
       - bot_data:/app/data
       - whatsapp_media:/app/public/media
 
@@ -48,8 +47,6 @@ volumes:
   pgdata:
     driver: local
   redisdata:
-    driver: local
-  whatsapp_auth:
     driver: local
   bot_data:
     driver: local
