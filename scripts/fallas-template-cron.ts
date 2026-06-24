@@ -1,9 +1,9 @@
 import "./env-loader.ts";
 import { Redis } from "ioredis";
+import { isWithinColombiaSendWindow, msUntilNextTopOfHour } from "../src/lib/colombia-schedule.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
-const FALLAS_TEMPLATE_INTERVAL_MS = 60 * 60 * 1000; // 1 hora
 const FALLAS_TEMPLATE_COOLDOWN_KEY = "bot:fallas_template_last_sent";
 // Mismo período que el intervalo: actúa como traba para no duplicar el envío si el
 // bot se reinicia varias veces dentro de la ventana de 1h (deploys, crashes, etc.).
@@ -24,8 +24,12 @@ const FALLAS_TEMPLATE_MESSAGE = [
 // dentro de Baileys y el recordatorio nunca llega a enviarse hasta el próximo ciclo de 2hs.
 const FALLAS_TEMPLATE_NOT_READY_RETRY_MS = 30_000;
 
-export async function runFallasTemplateCronOnce(): Promise<"sent" | "skipped" | "not_ready" | "error"> {
+export async function runFallasTemplateCronOnce(): Promise<"sent" | "skipped" | "not_ready" | "outside_window" | "error"> {
 	try {
+		// Solo se envía entre 6am y 12am (medianoche) hora Colombia — fuera de ese rango no hay
+		// agentes activos a quienes recordarles cómo reportar una falla.
+		if (!isWithinColombiaSendWindow()) return "outside_window";
+
 		const alreadySent = await redisClient.get(FALLAS_TEMPLATE_COOLDOWN_KEY);
 		if (alreadySent) return "skipped";
 
@@ -47,11 +51,12 @@ export async function runFallasTemplateCronOnce(): Promise<"sent" | "skipped" | 
 }
 
 export function startFallasTemplateCron(): void {
-	console.log("[fallas-template-cron] Iniciando loop del recordatorio de reporte de fallas (cada 1h)...");
+	console.log("[fallas-template-cron] Iniciando loop del recordatorio de reporte de fallas (cada hora en punto, 6am-12am Colombia)...");
 	const tick = async () => {
 		const result = await runFallasTemplateCronOnce();
-		const delay = result === "not_ready" ? FALLAS_TEMPLATE_NOT_READY_RETRY_MS : FALLAS_TEMPLATE_INTERVAL_MS;
+		const delay = result === "not_ready" ? FALLAS_TEMPLATE_NOT_READY_RETRY_MS : msUntilNextTopOfHour();
 		setTimeout(tick, delay);
 	};
-	tick();
+	// Primer tick alineado al próximo HH:00 en punto, no al instante en que arrancó el proceso.
+	setTimeout(tick, msUntilNextTopOfHour());
 }

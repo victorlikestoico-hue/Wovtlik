@@ -55,7 +55,7 @@ import {
 	markLatestGroupFailureReportResolved,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
-import { getAgentSchedule, clearAgentAbsence, queueAgentOffline } from "../sheets-client.ts";
+import { getAgentSchedule, clearAgentAbsence, queueAgentOffline, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
 import { createCalendarEvent } from "../google-calendar-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
@@ -88,6 +88,10 @@ const SCHEDULE_KEYWORDS = [
 	"mis turnos", "mi turno", "mi horario", "cuando trabajo",
 	"cuándo trabajo", "mi programacion", "mi programación",
 	"ver turnos", "ver mi horario",
+];
+const HORAS_DISPONIBLES_KEYWORDS = [
+	"horas disponibles", "horas para cubrir", "horas a cubrir", "horas sin cubrir",
+	"hay horas", "horas libres", "horas extra", "hhee", "cubrir horas",
 ];
 const OFFLINE_KEYWORDS = [
 	"inactivame", "inactivarme", "ponme fuera de línea", "ponme fuera de linea",
@@ -283,7 +287,7 @@ function isResolvedReportMessage(text: string): boolean {
 // Pending intent system: when any handler finds no profile it saves the intent
 // type so that tryRegisterEmailReply can chain back to the right flow.
 type PendingIntent =
-	| "absence" | "absence_date" | "offline" | "offline_reason" | "schedule" | "metrics"
+	| "absence" | "absence_date" | "offline" | "offline_reason" | "schedule" | "metrics" | "horas_lob"
 	| "appointment" | "appointment_role" | "appointment_phone" | "appointment_date" | "appointment_time" | "appointment_name";
 const pendingIntentKey = (phone: string) => `bot:pending_intent:${phone}`;
 const PENDING_INTENT_TTL = 300; // 5 minutes
@@ -445,6 +449,71 @@ async function tryScheduleReply(phone: string): Promise<string | null> {
 	} catch (err) {
 		console.error("[schedule] Error:", err);
 		return buildDirectReply("No pude consultar tus turnos en este momento. Intentá de nuevo en unos minutos.");
+	}
+}
+
+const DIACRITICS_REGEX = /[̀-ͯ]/g;
+
+function normalizeLobText(value: string): string {
+	return value
+		.toLowerCase()
+		.normalize("NFD").replace(DIACRITICS_REGEX, "")
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+/** Busca si el mensaje del agente nombra a alguno de los LOBs con horas pendientes. */
+function matchLobFromMessage(message: string, knownLobs: string[]): string | null {
+	const normMsg = normalizeLobText(message);
+	if (!normMsg) return null;
+	for (const lob of knownLobs) {
+		const normLob = normalizeLobText(lob);
+		if (normLob && (normMsg.includes(normLob) || normLob.includes(normMsg))) return lob;
+	}
+	return null;
+}
+
+/** Consulta la hoja "horas-cubrir" (ambas programaciones) y confirma si hay horas sin cubrir para el LOB del agente. */
+async function tryHorasDisponiblesReply(phone: string, message: string): Promise<string | null> {
+	const settings = await getSettings();
+	const id1 = (settings.programacion_1_id as string) || "";
+	const id2 = (settings.programacion_2_id as string) || "";
+	const ids = [...new Set([id1, id2].filter(Boolean))];
+
+	if (!ids.length) {
+		return buildDirectReply("Las programaciones no están configuradas aún. Contactá al TL.");
+	}
+
+	try {
+		const entries = await getHorasCubrir(ids);
+		if (!entries.length) {
+			await redisClient.del(pendingIntentKey(phone));
+			return buildDirectReply("Por ahora no hay horas extra sin cubrir en ningún LOB 👍");
+		}
+
+		const knownLobs = [...new Set(entries.map((e) => e.lob).filter(Boolean))];
+		const requestedLob = matchLobFromMessage(message, knownLobs);
+
+		if (!requestedLob) {
+			await redisClient.set(pendingIntentKey(phone), "horas_lob", "EX", PENDING_INTENT_TTL);
+			return buildDirectReply(
+				"¿Para qué LOB querés consultar las horas disponibles? 🤔",
+				`Hoy hay horas sin cubrir en: ${knownLobs.join(", ")}`,
+				"Respondé con el nombre del LOB.",
+			);
+		}
+
+		await redisClient.del(pendingIntentKey(phone));
+		const slots = entries.filter((e) => e.lob === requestedLob);
+		const lines = [`⏰ *Horas sin cubrir · ${requestedLob}*`];
+		for (const s of slots) {
+			const detalle = isHoraCubrirHHEE(s) ? "HHEE, paga plus" : s.tipoGestion || "normal";
+			lines.push(`${s.fecha} · ${s.horario} — ${detalle}`);
+		}
+		return buildDirectReply(lines.join("\n"));
+	} catch (err) {
+		console.error("[horas-disponibles] Error:", err);
+		return buildDirectReply("No pude consultar las horas disponibles en este momento. Intentá de nuevo en unos minutos.");
 	}
 }
 
@@ -1078,7 +1147,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 				);
 			}
 
-			const capabilities = "📊 métricas · 📅 turnos · ✏️ eliminar ausencias · 🔴 pasarte a offline";
+			const capabilities = "📊 métricas · 📅 turnos · ✏️ eliminar ausencias · 🔴 pasarte a offline · ⏰ horas extra disponibles";
 
 			if (pending === "schedule") {
 				await redisClient.del(pendingIntentKey(phone));
@@ -1158,7 +1227,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 		);
 	}
 
-	const capabilities = "📊 métricas · 📅 turnos · ✏️ eliminar ausencias · 🔴 pasarte a offline";
+	const capabilities = "📊 métricas · 📅 turnos · ✏️ eliminar ausencias · 🔴 pasarte a offline · ⏰ horas extra disponibles";
 
 	if (pending === "schedule") {
 		await redisClient.del(pendingIntentKey(phone));
@@ -1302,6 +1371,15 @@ export const inboundHandler = createInboundHandler({
 				// Schedule intent (Google Sheets)
 				if (SCHEDULE_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
 					const reply = await tryScheduleReply(conv.phone);
+					if (reply) return reply;
+				}
+
+				// Horas extra disponibles intent (Google Sheets, hoja "horas-cubrir")
+				// También cubre el turno siguiente cuando el bot preguntó por el LOB.
+				const pendingHorasLob = conv ? await redisClient.get(pendingIntentKey(conv.phone)) : null;
+				const isHorasLobFollowUp = pendingHorasLob === "horas_lob";
+				if ((HORAS_DISPONIBLES_KEYWORDS.some((kw) => msgLower.includes(kw)) || isHorasLobFollowUp) && conv) {
+					const reply = await tryHorasDisponiblesReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
 				}
 

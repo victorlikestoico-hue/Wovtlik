@@ -1,12 +1,12 @@
 import "./env-loader.ts";
 import { Redis } from "ioredis";
 import { getSettings } from "../src/lib/db.ts";
-import { getHorasCubrir, type HoraCubrirEntry } from "../src/lib/sheets-client.ts";
+import { getHorasCubrir, isHoraCubrirHHEE, type HoraCubrirEntry } from "../src/lib/sheets-client.ts";
 import { generateCreativeText } from "../src/lib/ai-providers.ts";
+import { isWithinColombiaSendWindow, msUntilNextTopOfHour } from "../src/lib/colombia-schedule.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
-const HORAS_CUBRIR_INTERVAL_MS = 60 * 60 * 1000; // 1 hora
 const HORAS_CUBRIR_COOLDOWN_KEY = "bot:horas_cubrir_last_sent";
 // Traba para no duplicar el envío si el bot se reinicia varias veces dentro de la
 // ventana de 1h (deploys, crashes, etc.), igual que fallas-template-cron.
@@ -17,26 +17,50 @@ const ANUNCIOS_HORAS_GROUP_JID = "120363048382543444@g.us";
 // Reintento corto cuando el socket todavía no terminó de autenticarse (recién arrancado el proceso).
 const HORAS_CUBRIR_NOT_READY_RETRY_MS = 30_000;
 
+/** Parsea "HH:mm - HH:mm" a cantidad de horas, soportando turnos que cruzan medianoche. */
+function parseHorarioHours(horario: string): number | null {
+	const m = horario.match(/(\d{1,2}):(\d{2})\s*[-–]\s*(\d{1,2}):(\d{2})/);
+	if (!m) return null;
+	const start = parseInt(m[1]) * 60 + parseInt(m[2]);
+	let end = parseInt(m[3]) * 60 + parseInt(m[4]);
+	if (end <= start) end += 24 * 60;
+	return (end - start) / 60;
+}
+
+function sumHours(slots: HoraCubrirEntry[]): number {
+	return slots.reduce((total, s) => total + (parseHorarioHours(s.horario) ?? 0), 0);
+}
+
 function buildPrompt(entries: HoraCubrirEntry[]): string {
-	const byLob = new Map<string, HoraCubrirEntry[]>();
+	const byLob = new Map<string, { hhee: HoraCubrirEntry[]; normal: HoraCubrirEntry[] }>();
 	for (const e of entries) {
 		const lob = e.lob || "Sin LOB especificado";
-		if (!byLob.has(lob)) byLob.set(lob, []);
-		byLob.get(lob)!.push(e);
+		if (!byLob.has(lob)) byLob.set(lob, { hhee: [], normal: [] });
+		const bucket = byLob.get(lob)!;
+		(isHoraCubrirHHEE(e) ? bucket.hhee : bucket.normal).push(e);
 	}
 
 	const resumen = [...byLob.entries()]
-		.map(([lob, slots]) => {
-			const detalle = slots.map((s) => `${s.fecha} ${s.horario}`).join(", ");
-			return `- ${lob}: ${slots.length} hora(s) sin cubrir (${detalle})`;
+		.map(([lob, { hhee, normal }]) => {
+			const partes: string[] = [];
+			if (hhee.length) {
+				partes.push(`${sumHours(hhee)}h HHEE (pagan plus) — ${hhee.map((s) => `${s.fecha} ${s.horario}`).join(", ")}`);
+			}
+			if (normal.length) {
+				partes.push(`${sumHours(normal)}h normales, NO son HHEE — ${normal.map((s) => `${s.fecha} ${s.horario}`).join(", ")}`);
+			}
+			return `- ${lob}: ${partes.join(" | ")}`;
 		})
 		.join("\n");
 
 	return [
-		"Sos el asistente que anuncia horas extra (HHEE) disponibles para cubrir, en un grupo de WhatsApp de agentes de Customer Success.",
-		"Con la siguiente información de LOBs (líneas de negocio) con horas pendientes de cubrir, escribí UN solo mensaje para WhatsApp.",
-		"El mensaje debe ser creativo, ingenioso y breve, con emojis, y debe motivar a los agentes a anotarse para cubrir esas horas.",
-		"Nombrá explícitamente TODOS los LOBs con horas disponibles de la lista. No inventes datos que no estén en la lista.",
+		"Sos el asistente que anuncia horas disponibles para cubrir, en un grupo de WhatsApp de agentes de Customer Success.",
+		"A continuación tenés, por LOB, las horas sin cubrir ya separadas en dos grupos: HHEE (pagan un plus) y normales (NO pagan extra).",
+		"CRÍTICO: nunca sumes, mezcles ni generalices las horas HHEE con las normales de un mismo LOB ni de LOBs distintos — son conceptos de pago distintos y deben quedar diferenciados en el mensaje.",
+		"No recalcules los totales de horas: usá tal cual los números que te paso, no los reinterpretes ni los redondees.",
+		"Con esa información, escribí UN solo mensaje para WhatsApp, creativo, ingenioso y breve, con emojis, que motive a los agentes a anotarse.",
+		"Nombrá explícitamente TODOS los LOBs de la lista, indicando para cada uno cuántas horas HHEE y cuántas normales hay (omití el grupo que esté vacío en ese LOB). Dejá claro que las HHEE pagan más que las normales.",
+		"No inventes datos que no estén en la lista.",
 		"Usá formato de WhatsApp para negrita (un asterisco de cada lado, ej: *texto*), nunca markdown tipo ** o ##.",
 		"No agregues instrucciones de cómo anotarse (eso ya lo sabe el equipo). Devolvé solo el texto final del mensaje, sin comillas ni bloques de código.",
 		"",
@@ -45,8 +69,11 @@ function buildPrompt(entries: HoraCubrirEntry[]): string {
 	].join("\n");
 }
 
-export async function runHorasCubrirCronOnce(): Promise<"sent" | "skipped" | "empty" | "not_ready" | "error"> {
+export async function runHorasCubrirCronOnce(): Promise<"sent" | "skipped" | "empty" | "not_ready" | "outside_window" | "error"> {
 	try {
+		// Solo se envía entre 6am y 12am (medianoche) hora Colombia.
+		if (!isWithinColombiaSendWindow()) return "outside_window";
+
 		const alreadySent = await redisClient.get(HORAS_CUBRIR_COOLDOWN_KEY);
 		if (alreadySent) return "skipped";
 
@@ -82,11 +109,12 @@ export async function runHorasCubrirCronOnce(): Promise<"sent" | "skipped" | "em
 }
 
 export function startHorasCubrirCron(): void {
-	console.log("[horas-cubrir-cron] Iniciando loop de anuncio de horas a cubrir (cada 1h)...");
+	console.log("[horas-cubrir-cron] Iniciando loop de anuncio de horas a cubrir (cada hora en punto, 6am-12am Colombia)...");
 	const tick = async () => {
 		const result = await runHorasCubrirCronOnce();
-		const delay = result === "not_ready" ? HORAS_CUBRIR_NOT_READY_RETRY_MS : HORAS_CUBRIR_INTERVAL_MS;
+		const delay = result === "not_ready" ? HORAS_CUBRIR_NOT_READY_RETRY_MS : msUntilNextTopOfHour();
 		setTimeout(tick, delay);
 	};
-	tick();
+	// Primer tick alineado al próximo HH:00 en punto, no al instante en que arrancó el proceso.
+	setTimeout(tick, msUntilNextTopOfHour());
 }

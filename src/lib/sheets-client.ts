@@ -450,6 +450,12 @@ export type HoraCubrirEntry = {
 	idUnico:       string;
 };
 
+// Las horas marcadas como HHEE en Novedades/Observaciones/Tipo de Gestión pagan un plus sobre
+// el resto — nunca se deben sumar ni mostrar junto con las horas "normales" de cobertura.
+export function isHoraCubrirHHEE(entry: HoraCubrirEntry): boolean {
+	return `${entry.novedades} ${entry.observaciones} ${entry.tipoGestion}`.toLowerCase().includes("hhee");
+}
+
 /** Lee las filas pendientes de la hoja "horas-cubrir" en una o más planillas (programaciones). */
 export async function getHorasCubrir(spreadsheetIds: string[]): Promise<HoraCubrirEntry[]> {
 	if (!SA_EMAIL || !SA_KEY) return [];
