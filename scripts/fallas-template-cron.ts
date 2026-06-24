@@ -16,7 +16,8 @@ const FALLAS_TEMPLATE_MESSAGE = [
 	"",
 	"1️⃣ Tu correo corporativo",
 	'2️⃣ El motivo (ej: "se fue la luz", "se cayó el internet", "HC no carga", "HC se quedó trabado")',
-	"3️⃣ Si ya llenaste el formulario de desconexión",
+	"3️⃣ El LOB al que perteneces",
+	"4️⃣ Si ya llenaste el formulario de desconexión",
 ].join("\n");
 
 // Reintento corto cuando el socket todavía no terminó de autenticarse (recién arrancado el proceso).

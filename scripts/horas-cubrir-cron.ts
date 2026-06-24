@@ -60,6 +60,7 @@ function buildPrompt(entries: HoraCubrirEntry[]): string {
 		"No recalcules los totales de horas: usá tal cual los números que te paso, no los reinterpretes ni los redondees.",
 		"Con esa información, escribí UN solo mensaje para WhatsApp, creativo, ingenioso y breve, con emojis, que motive a los agentes a anotarse.",
 		"Nombrá explícitamente TODOS los LOBs de la lista, indicando para cada uno cuántas horas HHEE y cuántas normales hay (omití el grupo que esté vacío en ese LOB). Dejá claro que las HHEE pagan más que las normales.",
+		"CRÍTICO: el mensaje SIEMPRE tiene que indicar que estas horas están disponibles para anotarse en el aplicativo de cambios de turno, en la sección *Horas Disponibles*. No omitas esto en ningún mensaje.",
 		"No inventes datos que no estén en la lista.",
 		"Usá formato de WhatsApp para negrita (un asterisco de cada lado, ej: *texto*), nunca markdown tipo ** o ##.",
 		"No agregues instrucciones de cómo anotarse (eso ya lo sabe el equipo). Devolvé solo el texto final del mensaje, sin comillas ni bloques de código.",
