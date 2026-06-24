@@ -331,6 +331,14 @@ function fmtAht(seconds: number | null): string {
 	return `${m}:${String(s).padStart(2, "0")} min`;
 }
 
+/** "juan.perez@pedidosya.com" → "Juan". Si no hay punto en el local-part, usa todo. */
+function deriveFirstNameFromEmail(email: string): string {
+	const localPart = email.split("@")[0] || "";
+	const firstToken = localPart.split(".")[0] || localPart;
+	if (!firstToken) return "";
+	return firstToken.charAt(0).toUpperCase() + firstToken.slice(1).toLowerCase();
+}
+
 function vsObjective(
 	value: number | null,
 	objKey: string,
@@ -856,7 +864,9 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 
 	const emailMatch = reason.match(EMAIL_REGEX);
 	const profile = await getAgentProfile(phone);
-	const email = (emailMatch ? emailMatch[0].toLowerCase() : undefined) || profile?.email;
+	// Si el número ya está registrado, su correo verificado manda siempre — un correo
+	// suelto en el texto (typo, el de un compañero, etc.) nunca debe pisarlo.
+	const email = profile?.email || (emailMatch ? emailMatch[0].toLowerCase() : undefined);
 	const formStatus = detectFormStatus(reason);
 
 	try {
@@ -880,8 +890,9 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 	if (!(globalSock && isSocketConnected)) return;
 
 	const formNote = formStatus === "yes" ? "✅ sí" : formStatus === "no" ? "⚠️ no" : "no detectado";
+	const firstName = email ? deriveFirstNameFromEmail(email) : "";
 	const recap = [
-		"Vi tu reporte en el grupo de fallas 👀",
+		firstName ? `Hola ${firstName}, vi tu reporte en el grupo de fallas 👀` : "Vi tu reporte en el grupo de fallas 👀",
 		email ? `Correo: ${email}` : "No identifiqué tu correo — respondé acá con tu correo corporativo para poder gestionarlo.",
 		`Motivo: ${reason.slice(0, 300)}`,
 		`Formulario de desconexión: ${formNote}`,
@@ -1199,6 +1210,9 @@ export const inboundHandler = createInboundHandler({
 	getRecentHistory,
 	getActiveSystemPrompt,
 	callDeepSeek: async (input) => {
+		// Si el número ya está identificado como agente registrado, se inyecta en el
+		// prompt para que la IA lo trate por su nombre y no vuelva a pedirle el correo.
+		let identityContext = "";
 		try {
 			// Extract last user message from history + queued
 			const allMessages = [
@@ -1211,6 +1225,14 @@ export const inboundHandler = createInboundHandler({
 			// Determine if this is a 1-on-1 conversation (not a group)
 			const conv = await getConversationById(input.conversationId);
 			const isGroup = conv?.jid?.endsWith("@g.us") ?? false;
+
+			if (!isGroup && conv) {
+				const identifiedProfile = await getAgentProfile(conv.phone);
+				if (identifiedProfile) {
+					const firstName = deriveFirstNameFromEmail(identifiedProfile.email);
+					identityContext = `[Sistema — Este número ya está identificado como agente registrado. Nombre: ${firstName}. Correo: ${identifiedProfile.email}. Llamalo por su nombre y no le pidas el correo de nuevo; cualquier consulta que requiera su correo debe usar este, no otro que mencione.]\n`;
+				}
+			}
 
 			if (!isGroup) {
 				// Confirmación de un reporte capturado en el grupo de fallas — tiene prioridad
@@ -1316,7 +1338,7 @@ export const inboundHandler = createInboundHandler({
 			minute: "2-digit",
 			hour12: true,
 		});
-		const enrichedSystemPrompt = `[Sistema — Fecha y hora actual en Colombia: ${colombiaDate}]\n\n${input.systemPrompt}`;
+		const enrichedSystemPrompt = `[Sistema — Fecha y hora actual en Colombia: ${colombiaDate}]\n${identityContext}\n${input.systemPrompt}`;
 		const res = await chatClient.generateNormalReply({
 			systemPrompt: enrichedSystemPrompt,
 			history: input.history,
