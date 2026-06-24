@@ -415,7 +415,8 @@ async function tryScheduleReply(phone: string): Promise<string | null> {
 	const settings = await getSettings();
 	const id1 = (settings.programacion_1_id as string) || "";
 	const id2 = (settings.programacion_2_id as string) || "";
-	const ids  = [id1, id2].filter(Boolean);
+	// new Set() evita duplicar los turnos si ambas configuraciones apuntan a la misma planilla.
+	const ids = [...new Set([id1, id2].filter(Boolean))];
 
 	if (!ids.length) {
 		return buildDirectReply("Las programaciones no están configuradas aún. Contactá al TL.");
@@ -737,10 +738,11 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 	}
 
 	const settings = await getSettings();
-	const ids = [
+	// new Set() evita procesar la misma planilla dos veces si ambas configuraciones coinciden.
+	const ids = [...new Set([
 		(settings.programacion_1_id as string) || "",
 		(settings.programacion_2_id as string) || "",
-	].filter(Boolean);
+	].filter(Boolean))];
 
 	if (!ids.length) {
 		return buildDirectReply("Las programaciones no están configuradas. Contactá al TL.");
