@@ -97,6 +97,9 @@ const OFFLINE_KEYWORDS = [
 	"se cayó el internet", "se cayo el internet",
 	"perdí internet", "perdi internet", "se me fue el internet", "se fue el internet",
 	"sin internet y tengo chat", "tengo chats y sin internet",
+	"internet falló", "internet fallo", "falló el internet", "fallo el internet",
+	"falló mi internet", "fallo mi internet", "se me falló el internet", "se me fallo el internet",
+	"falló la conexión", "fallo la conexion", "falló la señal", "fallo la senal",
 	"caí del sistema", "cai del sistema",
 	"me quedé sin internet", "me quede sin internet",
 	"ponme inactivo", "dejarme fuera de línea", "dejarme fuera de linea",
@@ -947,7 +950,21 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	const lower = text.toLowerCase();
 	const hasFailureKeyword = OFFLINE_KEYWORDS.some((kw) => lower.includes(kw));
 	const hasActiveReport = fallasGroupTimers.has(phone);
-	if (!hasFailureKeyword && !hasActiveReport) return;
+	if (!hasFailureKeyword && !hasActiveReport) {
+		// No matcheó ninguna keyword conocida. Si de todas formas suena a una falla real
+		// (menciona "internet", "luz", "hc", etc.), lo logueamos para revisar y ampliar
+		// OFFLINE_KEYWORDS — así un reporte real no queda invisible sin que nadie lo note.
+		const nearMissCategories = detectNearMissCategories(text);
+		if (nearMissCategories.length > 0) {
+			logNearMissIntent({
+				conversationId: null,
+				phone,
+				message: text,
+				categories: nearMissCategories,
+			}).catch((err) => console.error("[near-miss] Error logueando intent del grupo de fallas:", err));
+		}
+		return;
+	}
 
 	const debounceKey = fallasGroupDebounceKey(phone);
 	const raw = await redisClient.get(debounceKey);
