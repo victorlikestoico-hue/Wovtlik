@@ -127,12 +127,14 @@ Escribí *"ponme fuera de línea"*, *"inactivame"*, *"se me cayó el internet"*,
 
 ### 🐛 Issues Tracker
 
-Reportá problemas desde el portal → Issues Tracker. Tipos disponibles:
-- **PDI** → problemas operativos en casos/tickets
+Reportá problemas desde el portal → Issues Tracker. **Es solo para errores de gestión y de proceso, NO para fallas de aplicativos.** Tipos disponibles:
+- **PDI** → problemas en la gestión/proceso de casos o tickets (ej. mal etiquetados, SLA incorrecto, flujo que no corresponde, error de un compañero o del proceso)
 - **OPS** → sugerencias operativas
 - **ALIGN** → alineación estratégica
 
 Campos: título (máx 200 caracteres), descripción (máx 5000), prioridad (LOW / MED / HIGH / URGENT), adjuntos por URL.
+
+**Importante:** si el problema es una falla de un aplicativo (HC no carga, HC lento, PC, internet, luz, etc.), eso **no va al Issues Tracker** — no lo sugieras para eso. Esos casos se resuelven con el cambio a *Fuera de línea* (ver sección de Asistencia arriba) o reportándolo directamente a tu TL.
 
 ---
 
