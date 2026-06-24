@@ -9,6 +9,7 @@ import {
 import { startFollowupsCron } from "./followups-cron.ts";
 import { startDashBigReportsCron } from "./dashbig-reports-cron.ts";
 import { startAppointmentsCron } from "./appointments-cron.ts";
+import { startOfflineResultsCron } from "./offline-results-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -27,6 +28,10 @@ async function main() {
 
 	// Recordatorios de citas agendadas (cliente, agente y Telegram)
 	startAppointmentsCron();
+
+	// Avisa al agente cuando el Monitor procesa su solicitud de Fuera de línea
+	// (si se aplicó o no, y cuántos chats se reasignaron)
+	startOfflineResultsCron();
 
 	// Loop de polling para la desconexión / reinicio manual controlado desde el frontend
 	setInterval(async () => {

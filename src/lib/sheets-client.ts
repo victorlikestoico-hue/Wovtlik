@@ -362,6 +362,42 @@ export async function queueAgentOffline(
 	}
 }
 
+export interface OfflineQueueRow {
+	timestamp: string;
+	email: string;
+	reason: string;
+	status: string;
+	result: string;
+}
+
+/** Lee las filas de la planilla de offline queue (incluye las ya procesadas por el Monitor). */
+export async function getOfflineQueueResults(spreadsheetId: string): Promise<OfflineQueueRow[]> {
+	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return [];
+	try {
+		const token = await getAccessToken();
+		const range = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A2:E`);
+		const res = await fetch(
+			`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`,
+			{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
+		);
+		if (!res.ok) {
+			console.error(`[sheets] getOfflineQueueResults error ${res.status}:`, await res.text());
+			return [];
+		}
+		const data = await res.json() as { values?: string[][] };
+		return (data.values ?? []).map((row) => ({
+			timestamp: row[0] ?? "",
+			email: row[1] ?? "",
+			reason: row[2] ?? "",
+			status: row[3] ?? "",
+			result: row[4] ?? "",
+		}));
+	} catch (err) {
+		console.error("[sheets] Error leyendo resultados de offline queue:", err);
+		return [];
+	}
+}
+
 const MONITOR_CONFIG_TAB = "Config";
 
 /** Lee un valor del tab Config de la planilla del Monitor. */
