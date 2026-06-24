@@ -387,9 +387,10 @@ async function tryAgentMetricsReply(phone: string, mode: "mtd" | "latest" = "mtd
 
 	const { metrics, objectives, period, lob } = data;
 	const obj = lob && objectives[lob] ? objectives[lob] : {};
+	const firstName = deriveFirstNameFromEmail(profile.email);
 	const modeLabel = mode === "latest" ? `📅 Último día: ${period.end}` : `📊 Acumulado: ${period.start} → ${period.end}`;
 	const lines = [
-		`*Tus métricas* ${lob ? `· ${lob}` : ""}`,
+		`*${firstName ? `${firstName}, tus` : "Tus"} métricas* ${lob ? `· ${lob}` : ""}`,
 		modeLabel,
 		`CSAT: ${fmtPct(metrics.csat)}${vsObjective(metrics.csat, "csat", obj)}`,
 		`AHT: ${fmtAht(metrics.aht_seconds)}${vsObjective(metrics.aht_seconds, "aht", obj)}`,
@@ -429,7 +430,8 @@ async function tryScheduleReply(phone: string): Promise<string | null> {
 			);
 		}
 
-		const lines = [`📅 *Tus turnos*`];
+		const firstName = deriveFirstNameFromEmail(profile.email);
+		const lines = [`📅 *${firstName ? `${firstName}, tus` : "Tus"} turnos*`];
 		for (const s of shifts) {
 			const parts = [s.fecha, s.horario, s.estado].filter(Boolean).join(" · ");
 			const novedad = s.novedades ? ` — ${s.novedades}` : "";
@@ -626,8 +628,9 @@ async function finalizeAppointment(
 		timeStyle: "short",
 	});
 
+	const firstName = profile ? deriveFirstNameFromEmail(profile.email) : "";
 	return buildDirectReply(
-		"✅ Cita agendada",
+		firstName ? `✅ Listo, ${firstName}: cita agendada` : "✅ Cita agendada",
 		`Cliente: ${partial.clientName} (${partial.clientPhone})`,
 		`Fecha: ${fechaLegible}${calendarEventId ? " · agregada al calendario" : ""}`,
 	);
@@ -761,9 +764,10 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 		const result = await clearAgentAbsence(profile.email, ids, targetDate);
 
 		if (result.success) {
+			const firstName = deriveFirstNameFromEmail(profile.email);
 			const detail = [result.fecha, result.horario].filter(Boolean).join(" — ");
 			return buildDirectReply(
-				"✅ Ausente eliminado correctamente",
+				firstName ? `✅ Listo, ${firstName}: ausente eliminado correctamente` : "✅ Ausente eliminado correctamente",
 				detail ? `Turno: ${detail}` : "",
 				"Si el sistema lo vuelve a marcar, contactá al TL para revisarlo.",
 			);
@@ -833,8 +837,9 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 		const queued = await queueAgentOffline(profile.email, reason, spreadsheetId);
 		if (queued) {
 			await redisClient.del(pendingIntentKey(phone));
+			const firstName = deriveFirstNameFromEmail(profile.email);
 			return buildDirectReply(
-				"✅ Solicitud recibida",
+				firstName ? `✅ Listo, ${firstName}` : "✅ Solicitud recibida",
 				"Voy a cambiarte a *Fuera de línea* en los próximos 1-3 minutos.",
 				"Si tenés chats activos esperá a que el sistema procese el cambio.",
 			);
@@ -1040,11 +1045,15 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 		if (existing.email.toLowerCase() === email) {
 			// Es el mismo email — encadenar al intent pendiente si lo hay, igual que en registro nuevo
 			const pending = (await redisClient.get(pendingIntentKey(phone))) as PendingIntent | null;
+			const firstName = deriveFirstNameFromEmail(existing.email);
+			const alreadyRegistered = firstName
+				? `✅ Hola ${firstName}, tu email *${email}* ya está registrado.`
+				: `✅ Tu email *${email}* ya está registrado.`;
 
 			if (pending === "absence" || pending === "absence_date") {
 				await redisClient.set(pendingIntentKey(phone), "absence_date", "EX", PENDING_INTENT_TTL);
 				return buildDirectReply(
-					`✅ Tu email *${email}* ya está registrado.`,
+					alreadyRegistered,
 					"Para eliminar la ausencia necesito la fecha 📅",
 					'Indicá el día/mes/año, ej: "08/06/2026" o simplemente "hoy".',
 				);
@@ -1056,7 +1065,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 				await redisClient.del(pendingIntentKey(phone));
 				const scheduleReply = await tryScheduleReply(phone);
 				return scheduleReply ?? buildDirectReply(
-					`✅ Tu email *${email}* ya está registrado.`,
+					alreadyRegistered,
 					`Podés pedir: ${capabilities}`,
 				);
 			}
@@ -1065,7 +1074,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 				await redisClient.del(pendingIntentKey(phone));
 				const metricsReply = await tryAgentMetricsReply(phone, "mtd");
 				return metricsReply ?? buildDirectReply(
-					`✅ Tu email *${email}* ya está registrado.`,
+					alreadyRegistered,
 					`Podés pedir: ${capabilities}`,
 				);
 			}
@@ -1073,7 +1082,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 			if (pending === "offline") {
 				await redisClient.set(pendingIntentKey(phone), "offline_reason", "EX", PENDING_INTENT_TTL);
 				return buildDirectReply(
-					`✅ Tu email *${email}* ya está registrado.`,
+					alreadyRegistered,
 					`Podés pedir: ${capabilities}`,
 					'Para pasarte a offline ahora respondé con el motivo, ej: "internet caído".',
 				);
@@ -1083,13 +1092,13 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 				await redisClient.del(pendingIntentKey(phone));
 				const reply = await tryScheduleAppointmentReply(phone, "");
 				return reply ?? buildDirectReply(
-					`✅ Tu email *${email}* ya está registrado.`,
+					alreadyRegistered,
 					`Podés pedir: ${capabilities}`,
 				);
 			}
 
 			return buildDirectReply(
-				`✅ Tu email *${email}* ya está registrado.`,
+				alreadyRegistered,
 				`Con él podés pedir: ${capabilities}.`,
 			);
 		}
@@ -1116,11 +1125,15 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 
 	// Encadenar al intent original si había uno pendiente
 	const pending = (await redisClient.get(pendingIntentKey(phone))) as PendingIntent | null;
+	const firstName = deriveFirstNameFromEmail(email);
+	const justRegistered = firstName
+		? `✅ ¡Hola ${firstName}! Email registrado: *${email}*`
+		: `✅ Email registrado: *${email}*`;
 
 	if (pending === "absence" || pending === "absence_date") {
 		await redisClient.set(pendingIntentKey(phone), "absence_date", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
-			`✅ Email registrado: *${email}*`,
+			justRegistered,
 			"Para eliminar la ausencia necesito la fecha 📅",
 			'Indicá el día/mes/año, ej: "08/06/2026" o simplemente "hoy".',
 		);
@@ -1132,7 +1145,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 		await redisClient.del(pendingIntentKey(phone));
 		const scheduleReply = await tryScheduleReply(phone);
 		return scheduleReply ?? buildDirectReply(
-			`✅ Email registrado: *${email}*`,
+			justRegistered,
 			`Podés pedir: ${capabilities}`,
 		);
 	}
@@ -1141,7 +1154,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 		await redisClient.del(pendingIntentKey(phone));
 		const metricsReply = await tryAgentMetricsReply(phone, "mtd");
 		return metricsReply ?? buildDirectReply(
-			`✅ Email registrado: *${email}*`,
+			justRegistered,
 			`Podés pedir: ${capabilities}`,
 		);
 	}
@@ -1149,7 +1162,7 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 	if (pending === "offline") {
 		await redisClient.set(pendingIntentKey(phone), "offline_reason", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
-			`✅ Email registrado: *${email}*`,
+			justRegistered,
 			`Podés pedir: ${capabilities}`,
 			'Para pasarte a offline ahora respondé con el motivo, ej: "internet caído".',
 		);
@@ -1159,13 +1172,13 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 		await redisClient.del(pendingIntentKey(phone));
 		const reply = await tryScheduleAppointmentReply(phone, "");
 		return reply ?? buildDirectReply(
-			`✅ Email registrado: *${email}*`,
+			justRegistered,
 			`Podés pedir: ${capabilities}`,
 		);
 	}
 
 	return buildDirectReply(
-		`✅ Email registrado: *${email}*`,
+		justRegistered,
 		`Podés pedir: ${capabilities}`,
 	);
 }
