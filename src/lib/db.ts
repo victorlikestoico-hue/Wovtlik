@@ -927,3 +927,102 @@ export async function listAgentProfiles(): Promise<AgentProfileRow[]> {
 	return res.rows;
 }
 
+// ── Near-miss intents (mensajes que cayeron al chat genérico pero mencionaban algo
+// relacionado a una capacidad conocida — sirve para detectar palabras clave faltantes) ──
+
+export interface NearMissIntentRow {
+	id: number;
+	conversation_id: number | null;
+	phone: string;
+	message: string;
+	suspected_categories: string[];
+	created_at: Date;
+}
+
+export async function logNearMissIntent(input: {
+	conversationId: number | null;
+	phone: string;
+	message: string;
+	categories: string[];
+}): Promise<void> {
+	await ensureSchemaInitialized();
+	await pool.query(
+		`INSERT INTO near_miss_intents (conversation_id, phone, message, suspected_categories)
+		 VALUES ($1, $2, $3, $4)`,
+		[input.conversationId, input.phone, input.message, input.categories],
+	);
+}
+
+export async function listNearMissIntents(limit = 100): Promise<NearMissIntentRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<NearMissIntentRow>(
+		"SELECT * FROM near_miss_intents ORDER BY created_at DESC LIMIT $1",
+		[limit],
+	);
+	return res.rows;
+}
+
+// ── Reportes del grupo de fallas (Internet/Luz) — historial persistente para el TL ──
+
+export interface GroupFailureReportRow {
+	id: number;
+	phone: string;
+	sender_name: string;
+	email: string | null;
+	reason: string;
+	form_status: "yes" | "no" | "unknown";
+	resolved: boolean;
+	confirmed: boolean;
+	queued_offline: boolean;
+	created_at: Date;
+}
+
+export async function insertGroupFailureReport(input: {
+	phone: string;
+	senderName: string;
+	email?: string | null;
+	reason: string;
+	formStatus: "yes" | "no" | "unknown";
+}): Promise<GroupFailureReportRow> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<GroupFailureReportRow>(
+		`INSERT INTO group_failure_reports (phone, sender_name, email, reason, form_status)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING *`,
+		[input.phone, input.senderName, input.email ?? null, input.reason, input.formStatus],
+	);
+	return res.rows[0];
+}
+
+export async function markGroupFailureReportConfirmed(id: number, queuedOffline: boolean): Promise<void> {
+	await ensureSchemaInitialized();
+	await pool.query(
+		"UPDATE group_failure_reports SET confirmed = TRUE, queued_offline = $2 WHERE id = $1",
+		[id, queuedOffline],
+	);
+}
+
+/** Marca como resuelto el último reporte sin resolver de ese teléfono (ej. "ya llegó la luz"). */
+export async function markLatestGroupFailureReportResolved(phone: string): Promise<void> {
+	await ensureSchemaInitialized();
+	await pool.query(
+		`UPDATE group_failure_reports SET resolved = TRUE
+		 WHERE id = (
+		   SELECT id FROM group_failure_reports
+		   WHERE phone = $1 AND resolved = FALSE
+		   ORDER BY created_at DESC
+		   LIMIT 1
+		 )`,
+		[phone],
+	);
+}
+
+export async function listGroupFailureReports(limit = 100): Promise<GroupFailureReportRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<GroupFailureReportRow>(
+		"SELECT * FROM group_failure_reports ORDER BY created_at DESC LIMIT $1",
+		[limit],
+	);
+	return res.rows;
+}
+

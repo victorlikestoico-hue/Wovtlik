@@ -352,6 +352,31 @@ CREATE TABLE IF NOT EXISTS whatsapp_instances (
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_instances_one_active ON whatsapp_instances(is_active) WHERE is_active = TRUE;
+
+CREATE TABLE IF NOT EXISTS near_miss_intents (
+  id SERIAL PRIMARY KEY,
+  conversation_id INTEGER REFERENCES conversations(id) ON DELETE SET NULL,
+  phone TEXT NOT NULL,
+  message TEXT NOT NULL,
+  suspected_categories TEXT[] NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_near_miss_intents_created_at ON near_miss_intents(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS group_failure_reports (
+  id SERIAL PRIMARY KEY,
+  phone TEXT NOT NULL,
+  sender_name TEXT NOT NULL,
+  email TEXT,
+  reason TEXT NOT NULL,
+  form_status TEXT CHECK(form_status IN ('yes','no','unknown')) NOT NULL DEFAULT 'unknown',
+  resolved BOOLEAN NOT NULL DEFAULT FALSE,
+  confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+  queued_offline BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_group_failure_reports_phone ON group_failure_reports(phone);
+CREATE INDEX IF NOT EXISTS idx_group_failure_reports_created_at ON group_failure_reports(created_at DESC);
 `;
 
 export interface ConversationRow {

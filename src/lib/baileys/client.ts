@@ -49,6 +49,10 @@ import {
 	saveAgentProfile,
 	saveCrmTask,
 	notifyGroupFailureReport,
+	logNearMissIntent,
+	insertGroupFailureReport,
+	markGroupFailureReportConfirmed,
+	markLatestGroupFailureReportResolved,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
 import { getAgentSchedule, clearAgentAbsence, queueAgentOffline } from "../sheets-client.ts";
@@ -188,6 +192,31 @@ const ABSENCE_KEYWORDS = [
 	"tengo ausente", "me aparece ausente", "me sale ausente",
 ];
 
+// ── Detección de "casi-aciertos" ────────────────────────────────────────────
+// Señales más amplias/difusas que las listas de arriba (a propósito). Si un mensaje
+// llega hasta el chat genérico de IA pero menciona algo de esto, es señal de que
+// probablemente faltó una palabra clave — se loguea para revisar y ampliar listas.
+const NEAR_MISS_SIGNALS: Record<string, string[]> = {
+	appointment: ["cita", "agendar", "agenda", "demo", "reunion", "reunión", "visita"],
+	offline: [
+		"luz", "internet", "señal", "energia", "energía", "apagon", "apagón",
+		"computador", "computadora", "falla electrica", "falla eléctrica", "hc lent",
+		"hc no", "hc se", "hc cai", "se cayo el hc", "se cayó el hc",
+	],
+	absence: ["ausente", "ausencia", "falta"],
+	schedule: ["mi turno", "mis turnos", "horario"],
+	metrics: ["metricas", "métricas", "calificacion", "calificación", "desempeño", "kpi"],
+};
+
+function detectNearMissCategories(text: string): string[] {
+	const lower = text.toLowerCase();
+	const categories: string[] = [];
+	for (const [category, signals] of Object.entries(NEAR_MISS_SIGNALS)) {
+		if (signals.some((s) => lower.includes(s))) categories.push(category);
+	}
+	return categories;
+}
+
 // ── Monitoreo del grupo "CS reporte fallas Internet/Luz" ───────────────────
 // Los agentes reportan ahí (no por DM) caídas de internet, luz y fallas de HC.
 // El bot detecta esos reportes, identifica al remitente real (no al grupo) y
@@ -210,6 +239,7 @@ const groupReportPendingKey = (phone: string) => `bot:group_report_pending:${pho
 const fallasGroupTimers = new Map<string, NodeJS.Timeout>();
 
 interface GroupReportPending {
+	id: number; // fila en group_failure_reports, para poder marcar confirmed/queued_offline
 	email?: string;
 	reason: string;
 	formStatus: "yes" | "no" | "unknown";
@@ -835,7 +865,16 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 		console.error("[fallas-group] Error notificando a Telegram:", err);
 	}
 
-	const pending: GroupReportPending = { email, reason, formStatus, senderName };
+	let reportId: number | null = null;
+	try {
+		const saved = await insertGroupFailureReport({ phone, senderName, email, reason, formStatus });
+		reportId = saved.id;
+	} catch (err) {
+		console.error("[fallas-group] Error guardando el reporte en la base:", err);
+	}
+	if (reportId === null) return; // sin fila persistida no podemos rastrear la confirmación
+
+	const pending: GroupReportPending = { id: reportId, email, reason, formStatus, senderName };
 	await redisClient.set(groupReportPendingKey(phone), JSON.stringify(pending), "EX", GROUP_REPORT_PENDING_TTL);
 
 	if (!(globalSock && isSocketConnected)) return;
@@ -870,6 +909,11 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 		// Limpiar cualquier confirmación pendiente: ya se resolvió solo, no tiene sentido
 		// procesar un "sí" desactualizado contra un reporte que ya no aplica.
 		await redisClient.del(groupReportPendingKey(phone));
+		try {
+			await markLatestGroupFailureReportResolved(phone);
+		} catch (err) {
+			console.error("[fallas-group] Error marcando el reporte como resuelto en la base:", err);
+		}
 		try {
 			await notifyGroupFailureReport({ phone, senderName, reason: text, formStatus: "unknown", resolved: true });
 		} catch (err) {
@@ -939,6 +983,11 @@ async function tryHandleGroupReportConfirmation(phone: string, message: string):
 		}
 		try {
 			const queued = await queueAgentOffline(pending.email, `${pending.reason} (reportado en grupo de fallas)`, spreadsheetId);
+			try {
+				await markGroupFailureReportConfirmed(pending.id, queued);
+			} catch (err) {
+				console.error("[fallas-group] Error marcando el reporte como confirmado en la base:", err);
+			}
 			if (queued) {
 				return buildDirectReply(
 					"✅ Listo",
@@ -949,6 +998,7 @@ async function tryHandleGroupReportConfirmation(phone: string, message: string):
 			return buildDirectReply("No pude registrar la solicitud en este momento. Contactá al TL.");
 		} catch (err) {
 			console.error("[fallas-group] Error confirmando offline:", err);
+			await markGroupFailureReportConfirmed(pending.id, false).catch(() => {});
 			return buildDirectReply("Ocurrió un error al registrar tu solicitud. Intentá de nuevo en unos minutos.");
 		}
 	}
@@ -1226,6 +1276,21 @@ export const inboundHandler = createInboundHandler({
 				if ((matchesAbsenceIntent(msgLower) || isAbsenceDateFollowUp) && conv) {
 					const reply = await tryRemoveAbsenceReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
+				}
+
+				// Si llegamos hasta acá, ningún intent de arriba matcheó. Si el mensaje de todas
+				// formas menciona algo relacionado a una capacidad conocida, lo logueamos para
+				// revisar y ampliar las palabras clave — no afecta la respuesta de este turno.
+				if (conv) {
+					const nearMissCategories = detectNearMissCategories(lastUserMsg);
+					if (nearMissCategories.length > 0) {
+						logNearMissIntent({
+							conversationId: conv.id,
+							phone: conv.phone,
+							message: lastUserMsg,
+							categories: nearMissCategories,
+						}).catch((err) => console.error("[near-miss] Error logueando intent:", err));
+					}
 				}
 			}
 
