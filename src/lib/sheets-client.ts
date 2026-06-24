@@ -121,7 +121,10 @@ async function updateCell(
 	spreadsheetId: string,
 	rowNumber: number,
 	colIndex: number,
-	value: string,
+	// Las columnas tipo checkbox (ej. "Asistencia") necesitan un booleano real —
+	// si se manda el texto "TRUE" se ve como texto superpuesto al cuadrito, no como
+	// el cuadrito tildado.
+	value: string | boolean,
 ): Promise<void> {
 	const token = await getAccessToken();
 	const col   = colIndexToLetter(colIndex);
@@ -213,12 +216,13 @@ export async function clearAgentAbsence(
 	const nowMin    = currentMinutesAR();
 
 	type Candidate = {
-		sheetId:   string;
-		rowIndex:  number;
-		estadoCol: number;
-		fecha:     string; // raw from sheet
-		horario:   string;
-		fechaNorm: string; // YYYY-MM-DD
+		sheetId:       string;
+		rowIndex:      number;
+		estadoCol:     number;
+		asistenciaCol: number; // -1 si la planilla no tiene esa columna
+		fecha:         string; // raw from sheet
+		horario:       string;
+		fechaNorm:     string; // YYYY-MM-DD
 	};
 
 	const all: Candidate[] = [];
@@ -227,10 +231,11 @@ export async function clearAgentAbsence(
 		if (!id) continue;
 		try {
 			const { headers, rows } = await readSheetRaw(id);
-			const emailCol   = headers.findIndex(h => /^email$/i.test(h));
-			const fechaCol   = headers.findIndex(h => /^fecha$/i.test(h));
-			const horarioCol = headers.findIndex(h => /^horario\s*roster$/i.test(h));
-			const estadoCol  = headers.findIndex(h => /^estado$/i.test(h));
+			const emailCol       = headers.findIndex(h => /^email$/i.test(h));
+			const fechaCol       = headers.findIndex(h => /^fecha$/i.test(h));
+			const horarioCol     = headers.findIndex(h => /^horario\s*roster$/i.test(h));
+			const estadoCol      = headers.findIndex(h => /^estado$/i.test(h));
+			const asistenciaCol  = headers.findIndex(h => /^asistencia$/i.test(h));
 			if (emailCol < 0 || fechaCol < 0 || estadoCol < 0) continue;
 
 			for (const { rowIndex, cells } of rows) {
@@ -243,6 +248,7 @@ export async function clearAgentAbsence(
 					sheetId:   id,
 					rowIndex,
 					estadoCol,
+					asistenciaCol,
 					fecha:     rawFecha,
 					horario:   horarioCol >= 0 ? (cells[horarioCol] ?? "") : "",
 					fechaNorm: normalizeFecha(rawFecha),
@@ -293,6 +299,11 @@ export async function clearAgentAbsence(
 
 	try {
 		await updateCell(target.sheetId, target.rowIndex, target.estadoCol, "");
+		// Al corregir la ausencia también se marca el check de Asistencia (booleano real,
+		// la columna es un checkbox en la planilla — no escribir el texto "TRUE").
+		if (target.asistenciaCol >= 0) {
+			await updateCell(target.sheetId, target.rowIndex, target.asistenciaCol, true);
+		}
 	} catch (err) {
 		console.error(`[sheets] Error clearing absence:`, err);
 		return { success: false, reason: "error", message: String(err) };
