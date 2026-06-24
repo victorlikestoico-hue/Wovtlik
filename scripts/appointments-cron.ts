@@ -8,6 +8,7 @@ import {
 	enqueueOutbox,
 	getAgentProfile,
 } from "../src/lib/db.ts";
+import { waitBetweenSends } from "../src/lib/send-pacing.ts";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
 const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -25,7 +26,8 @@ export async function runAppointmentsCronOnce(): Promise<void> {
 		const leadMinutes = Number(settings.appointment_reminder_lead_minutes ?? 60);
 		const rows = await getPendingAppointmentReminders(leadMinutes);
 
-		for (const row of rows) {
+		for (const [index, row] of rows.entries()) {
+			if (index > 0) await waitBetweenSends();
 			try {
 				const appointmentLocal = new Date(row.appointment_at).toLocaleString("es-AR", {
 					timeZone: "America/Argentina/Buenos_Aires",

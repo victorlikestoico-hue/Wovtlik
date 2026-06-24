@@ -80,6 +80,10 @@ export interface FollowUpSchedulerDeps {
 	}) => Promise<unknown>;
 	generateToken: () => string;
 	logger?: Pick<typeof console, "log" | "warn" | "error">;
+	// Pausa entre candidatos para no mandar varios follow-ups en paralelo/sin pausa
+	// (firma de comportamiento bot que los sistemas anti-abuso de WhatsApp detectan).
+	// Sin override (p. ej. en tests) no se espera nada.
+	waitBetweenSends?: () => Promise<void>;
 }
 
 export interface FollowUpRunResult {
@@ -149,6 +153,7 @@ function result(status: FollowUpRunResult["status"]): FollowUpRunResult {
 
 export function createFollowUpScheduler(deps: FollowUpSchedulerDeps) {
 	const logger = deps.logger ?? console;
+	const waitBetweenSends = deps.waitBetweenSends ?? (async () => {});
 
 	async function processCandidate(
 		candidate: ConversationRow,
@@ -388,9 +393,10 @@ export function createFollowUpScheduler(deps: FollowUpSchedulerDeps) {
 						: `[followup] Candidatas encontradas: ${candidates.length}. Se evaluarán una por una.`,
 				);
 				
-				await Promise.all(candidates.map(async (candidate) => {
+				for (const [index, candidate] of candidates.entries()) {
+					if (index > 0) await waitBetweenSends();
 					await processCandidate(candidate, query, run, now);
-				}));
+				}
 
 				run.processed =
 					run.sent +

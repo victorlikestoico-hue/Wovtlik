@@ -17,6 +17,7 @@ import {
 	getRecentHistory,
 } from "../src/lib/db.ts";
 import { Redis } from "ioredis";
+import { waitBetweenSends } from "../src/lib/send-pacing.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 const turnState = createIoredisTurnState(redisClient);
@@ -69,6 +70,7 @@ const scheduler = createFollowUpScheduler({
 		});
 	},
 	generateToken: () => Math.random().toString(36).substring(2, 15),
+	waitBetweenSends,
 });
 
 export async function runFollowupSchedulerOnce() {

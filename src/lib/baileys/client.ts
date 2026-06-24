@@ -59,6 +59,7 @@ import { getAgentSchedule, clearAgentAbsence, queueAgentOffline, getHorasCubrir,
 import { createCalendarEvent } from "../google-calendar-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
+import { waitBetweenSends } from "../send-pacing.ts";
 
 const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
 const authDir = runtimePaths.authDir;
@@ -1596,7 +1597,8 @@ function startOutboxProcessor() {
 		isProcessingOutbox = true;
 		try {
 			const pending = await getPendingOutbox(20);
-			for (const item of pending) {
+			for (const [index, item] of pending.entries()) {
+				if (index > 0) await waitBetweenSends();
 				const jid = outboxDestinationForConversation({
 					phone: item.conversation_phone ?? item.phone,
 					jid: item.conversation_jid ?? null,

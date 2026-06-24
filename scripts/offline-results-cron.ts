@@ -2,6 +2,7 @@ import "./env-loader.ts";
 import { Redis } from "ioredis";
 import { getSettings, getAgentProfileByEmail } from "../src/lib/db.ts";
 import { getOfflineQueueResults } from "../src/lib/sheets-client.ts";
+import { waitBetweenSends } from "../src/lib/send-pacing.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
@@ -56,6 +57,7 @@ export async function runOfflineResultsCronOnce(): Promise<void> {
 
 		const rows = await getOfflineQueueResults(spreadsheetId);
 		const now = Date.now();
+		let sentCount = 0;
 
 		for (const row of rows) {
 			if (!row.status || row.status.toLowerCase() === "pending") continue;
@@ -82,9 +84,11 @@ export async function runOfflineResultsCronOnce(): Promise<void> {
 			}
 
 			try {
+				if (sentCount > 0) await waitBetweenSends();
 				await globalSock.sendMessage(`${profile.phone}@s.whatsapp.net`, {
 					text: buildResultMessage(row.status, row.result, row.email),
 				});
+				sentCount++;
 				await redisClient.set(key, "1", "EX", NOTIFIED_KEY_TTL_SECONDS);
 			} catch (err) {
 				console.error(`[offline-results-cron] Error enviando aviso a ${row.email}:`, err);
