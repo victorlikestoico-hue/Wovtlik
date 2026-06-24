@@ -3,11 +3,11 @@ import { Redis } from "ioredis";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
-const FALLAS_TEMPLATE_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
+const FALLAS_TEMPLATE_INTERVAL_MS = 60 * 60 * 1000; // 1 hora
 const FALLAS_TEMPLATE_COOLDOWN_KEY = "bot:fallas_template_last_sent";
 // Mismo período que el intervalo: actúa como traba para no duplicar el envío si el
-// bot se reinicia varias veces dentro de la ventana de 2hs (deploys, crashes, etc.).
-const FALLAS_TEMPLATE_COOLDOWN_SECONDS = 2 * 60 * 60;
+// bot se reinicia varias veces dentro de la ventana de 1h (deploys, crashes, etc.).
+const FALLAS_TEMPLATE_COOLDOWN_SECONDS = 60 * 60;
 
 const FALLAS_TEMPLATE_MESSAGE = [
 	"📋 *Recordatorio: cómo reportar una falla acá*",
@@ -49,7 +49,7 @@ export async function runFallasTemplateCronOnce(): Promise<"sent" | "skipped" | 
 }
 
 export function startFallasTemplateCron(): void {
-	console.log("[fallas-template-cron] Iniciando loop del recordatorio de reporte de fallas (cada 2hs)...");
+	console.log("[fallas-template-cron] Iniciando loop del recordatorio de reporte de fallas (cada 1h)...");
 	const tick = async () => {
 		const result = await runFallasTemplateCronOnce();
 		const delay = result === "not_ready" ? FALLAS_TEMPLATE_NOT_READY_RETRY_MS : FALLAS_TEMPLATE_INTERVAL_MS;
