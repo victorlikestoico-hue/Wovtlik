@@ -221,7 +221,7 @@ function detectNearMissCategories(text: string): string[] {
 // Los agentes reportan ahí (no por DM) caídas de internet, luz y fallas de HC.
 // El bot detecta esos reportes, identifica al remitente real (no al grupo) y
 // le abre/continúa la conversación por privado para confirmar antes de tocar nada.
-const FALLAS_GROUP_JID = "5491151522899-1587685231@g.us";
+export const FALLAS_GROUP_JID = "5491151522899-1587685231@g.us";
 const FALLAS_GROUP_DEBOUNCE_MS = 75_000; // ventana para agrupar mensajes separados del mismo agente
 const FALLAS_GROUP_DEBOUNCE_TTL = 120; // segundos que vive el acumulado en Redis
 const GROUP_REPORT_PENDING_TTL = 600; // 10 minutos para confirmar por privado

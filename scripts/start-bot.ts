@@ -10,6 +10,7 @@ import { startFollowupsCron } from "./followups-cron.ts";
 import { startDashBigReportsCron } from "./dashbig-reports-cron.ts";
 import { startAppointmentsCron } from "./appointments-cron.ts";
 import { startOfflineResultsCron } from "./offline-results-cron.ts";
+import { startFallasTemplateCron } from "./fallas-template-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -32,6 +33,9 @@ async function main() {
 	// Avisa al agente cuando el Monitor procesa su solicitud de Fuera de línea
 	// (si se aplicó o no, y cuántos chats se reasignaron)
 	startOfflineResultsCron();
+
+	// Recordatorio cada 2hs en el grupo de fallas de qué datos enviar (correo, motivo, formulario)
+	startFallasTemplateCron();
 
 	// Loop de polling para la desconexión / reinicio manual controlado desde el frontend
 	setInterval(async () => {
