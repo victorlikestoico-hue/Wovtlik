@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import { motion } from "framer-motion";
 import {
+	AlertTriangle,
 	Blocks,
 	Bot,
 	ChevronsUpDown,
@@ -53,6 +54,7 @@ type Tab =
 	| "automations"
 	| "contacts"
 	| "analytics"
+	| "fallas"
 	| "settings";
 
 interface SidebarProps {
@@ -145,6 +147,7 @@ const primaryItems: NavItem[] = [
 const workspaceItems: NavItem[] = [
 	{ type: "tab", value: "deals", label: "Deals", icon: Layout },
 	{ type: "tab", value: "contacts", label: "Contactos CRM", icon: UserCircle },
+	{ type: "tab", value: "fallas", label: "Reportes de fallas", icon: AlertTriangle },
 	{ type: "placeholder", label: "Competitors", icon: UserSearch },
 	{ type: "placeholder", label: "Integrations", icon: Plug, badge: "DEV" },
 	{ type: "placeholder", label: "Manage", icon: Settings2, badge: "DEV" },

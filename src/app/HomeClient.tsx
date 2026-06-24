@@ -14,6 +14,7 @@ import ContactsOverview from "../components/ContactsOverview.tsx";
 import TasksBoard from "../components/TasksBoard.tsx";
 import Sidebar from "../components/Sidebar.tsx";
 import AnalyticsPanel from "../components/AnalyticsPanel.tsx";
+import FailureReportsPanel from "../components/FailureReportsPanel.tsx";
 import {
 	MessagesIcon,
 } from "../components/Icons.tsx";
@@ -27,6 +28,7 @@ type Tab =
 	| "automations"
 	| "contacts"
 	| "analytics"
+	| "fallas"
 	| "settings";
 
 const UI_STATE_STORAGE_KEY = "wopen.ui-state";
@@ -38,6 +40,7 @@ const TABS: readonly Tab[] = [
 	"automations",
 	"contacts",
 	"analytics",
+	"fallas",
 	"settings",
 ];
 
@@ -439,6 +442,8 @@ export default function HomeClient() {
 							)}
 
 									{activeTab === "analytics" && <AnalyticsPanel />}
+
+									{activeTab === "fallas" && <FailureReportsPanel />}
 
 								{activeTab === "settings" && <SettingsPanel />}
 								</>
