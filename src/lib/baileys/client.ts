@@ -262,6 +262,8 @@ const RESOLVED_REPORT_KEYWORDS = [
 
 const fallasGroupDebounceKey = (phone: string) => `bot:fallas_group_debounce:${phone}`;
 const groupReportPendingKey = (phone: string) => `bot:group_report_pending:${phone}`;
+const groupReportDmSentKey = (phone: string) => `bot:group_report_dm_sent:${phone}`;
+const GROUP_REPORT_DM_SENT_TTL = 1800; // 30 min — ventana para detectar confirmación expirada
 const fallasGroupTimers = new Map<string, NodeJS.Timeout>();
 
 interface GroupReportPending {
@@ -270,10 +272,31 @@ interface GroupReportPending {
 	reason: string;
 	formStatus: "yes" | "no" | "unknown";
 	senderName: string;
+	lob?: string;
+	failureType?: string;
 }
 
 function extractGroupMessageText(msg: any): string {
 	return msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
+}
+
+/** Intenta extraer el LOB del texto libre de un reporte del grupo. */
+function extractLobFromText(text: string): string | null {
+	const m = text.match(/\blob[:\s]+([a-záéíóúñüa-z0-9\s]{2,40}?)(?:[,;.\n]|$)/i);
+	return m ? m[1].trim() : null;
+}
+
+// Cache para el JID del grupo de fallas (se lee de settings para no requerir deploy si cambia).
+let _fallasGroupJidCache: { value: string; expiresAt: number } | null = null;
+
+async function getFallasGroupJid(): Promise<string> {
+	if (_fallasGroupJidCache && Date.now() < _fallasGroupJidCache.expiresAt) {
+		return _fallasGroupJidCache.value;
+	}
+	const settings = await getSettings().catch(() => ({} as Record<string, unknown>));
+	const jid = (settings.fallas_group_jid as string) || FALLAS_GROUP_JID;
+	_fallasGroupJidCache = { value: jid, expiresAt: Date.now() + 5 * 60 * 1000 };
+	return jid;
 }
 
 /** El participante de un grupo puede venir como @lid; participantPn trae el teléfono real. */
@@ -1056,9 +1079,11 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 	// suelto en el texto (typo, el de un compañero, etc.) nunca debe pisarlo.
 	const email = profile?.email || (emailMatch ? emailMatch[0].toLowerCase() : undefined);
 	const formStatus = detectFormStatus(reason);
+	const lob = extractLobFromText(reason) ?? undefined;
+	const failureType = classifyFailureReason(reason);
 
 	try {
-		await notifyGroupFailureReport({ phone, senderName, email, reason, formStatus, resolved: false });
+		await notifyGroupFailureReport({ phone, senderName, email, reason, formStatus, resolved: false, lob, failureType });
 	} catch (err) {
 		console.error("[fallas-group] Error notificando a Telegram:", err);
 	}
@@ -1072,12 +1097,11 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 	}
 	if (reportId === null) return; // sin fila persistida no podemos rastrear la confirmación
 
-	const pending: GroupReportPending = { id: reportId, email, reason, formStatus, senderName };
+	const pending: GroupReportPending = { id: reportId, email, reason, formStatus, senderName, lob, failureType };
 	await redisClient.set(groupReportPendingKey(phone), JSON.stringify(pending), "EX", GROUP_REPORT_PENDING_TTL);
 
 	if (!(globalSock && isSocketConnected)) return;
 
-	const failureType = classifyFailureReason(reason);
 	const formNote = formStatus === "yes"
 		? "✅ sí"
 		: formStatus === "no"
@@ -1087,6 +1111,7 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 	const recap = [
 		firstName ? `Hola ${firstName}, vi tu reporte en el grupo 👀` : "Vi tu reporte en el grupo de fallas 👀",
 		`Tipo de falla: *${failureType}*`,
+		lob ? `LOB: ${lob}` : "",
 		email ? `Correo: ${email}` : "⚠️ No identifiqué tu correo — respondé acá con tu email corporativo para poder gestionarlo.",
 		`Formulario de desconexión: ${formNote}`,
 		email ? '¿Es correcto? Respondé "sí" para que te cambie a *Fuera de línea*.' : "",
@@ -1094,6 +1119,9 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 
 	try {
 		await globalSock.sendMessage(`${phone}@s.whatsapp.net`, { text: recap });
+		// Marcar que enviamos el DM — si el pending expira antes de que confirmen,
+		// podemos detectarlo y avisarles en vez de dar una respuesta genérica.
+		await redisClient.set(groupReportDmSentKey(phone), "1", "EX", GROUP_REPORT_DM_SENT_TTL);
 	} catch (err) {
 		console.error(`[fallas-group] No se pudo enviar el DM de confirmación a ${phone}:`, err);
 	}
@@ -1172,7 +1200,21 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
  */
 async function tryHandleGroupReportConfirmation(phone: string, message: string): Promise<string | null> {
 	const raw = await redisClient.get(groupReportPendingKey(phone));
-	if (!raw) return null;
+	if (!raw) {
+		// Detectar si el agente intenta confirmar pero la ventana ya expiró
+		const dmWasSent = await redisClient.get(groupReportDmSentKey(phone));
+		if (dmWasSent) {
+			const isLateConfirm = /^(s[ií]|correcto|as[ií] es|exacto|eso es|confirmo)\b/.test(message.trim().toLowerCase());
+			if (isLateConfirm) {
+				await redisClient.del(groupReportDmSentKey(phone));
+				return buildDirectReply(
+					"⏰ Tu confirmación venció (pasaron más de 10 min).",
+					"Si todavía necesitás el cambio a *Fuera de línea*, escribime el motivo acá directamente (internet, luz, PC, HC) y lo proceso ahora.",
+				);
+			}
+		}
+		return null;
+	}
 	const pending: GroupReportPending = JSON.parse(raw);
 
 	const emailMatch = message.match(EMAIL_REGEX);
@@ -1201,7 +1243,10 @@ async function tryHandleGroupReportConfirmation(phone: string, message: string):
 			return buildDirectReply("La función de cambio de estado no está configurada. Contactá al TL.");
 		}
 		try {
-			const queued = await queueAgentOffline(pending.email, `${pending.reason} (reportado en grupo de fallas)`, spreadsheetId);
+			const queueReason = pending.failureType
+				? `${pending.failureType}${pending.lob ? ` — LOB ${pending.lob}` : ""} (reportado en grupo de fallas)`
+				: `${pending.reason.slice(0, 100)} (reportado en grupo de fallas)`;
+			const queued = await queueAgentOffline(pending.email, queueReason, spreadsheetId);
 			try {
 				await markGroupFailureReportConfirmed(pending.id, queued);
 			} catch (err) {
@@ -1532,7 +1577,7 @@ export const inboundHandler = createInboundHandler({
 					return buildMenuReply(firstName);
 				}
 
-				// Saludo de agente no registrado → bienvenida + pedir email
+				// Saludo → bienvenida para nuevos, menú para registrados
 				if (conv && GREETING_KEYWORDS.some((kw) =>
 					msgLower === kw || msgLower.startsWith(`${kw} `) ||
 					msgLower.startsWith(`${kw}!`) || msgLower.startsWith(`${kw},`)
@@ -1544,6 +1589,8 @@ export const inboundHandler = createInboundHandler({
 							"Puedo ayudarte con métricas 📊, turnos 📅, ausencias ✏️, cambio de estado 🔴 y horas extra ⏰.",
 							"Para activar estas funciones respondé con tu email corporativo, ej: \"luis@pedidosya.com\"",
 						);
+					} else {
+						return buildMenuReply(deriveFirstNameFromEmail(agentProfile.email));
 					}
 				}
 
@@ -2096,7 +2143,8 @@ export async function startWASocket() {
 				}
 			}
 
-			if (!msg.key.fromMe && msg.key?.remoteJid === FALLAS_GROUP_JID) {
+			const fallasJid = await getFallasGroupJid();
+			if (!msg.key.fromMe && msg.key?.remoteJid === fallasJid) {
 				try {
 					await handleFallasGroupMessage(msg);
 				} catch (err) {

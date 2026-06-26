@@ -47,6 +47,8 @@ export interface GroupFailureReportNotificationInput {
 	reason: string;
 	formStatus: "yes" | "no" | "unknown";
 	resolved: boolean;
+	lob?: string;
+	failureType?: string;
 }
 
 export type TelegramNotificationResult =
@@ -135,8 +137,9 @@ export function formatGroupFailureReportNotification(
 		input.resolved ? "✅ <b>Falla reportada como resuelta</b>" : "🚨 <b>Reporte de falla (grupo)</b>",
 		`Agente: ${escapeHtml(input.senderName)} (${escapeHtml(input.phone)})`,
 		input.email ? `Correo: ${escapeHtml(input.email)}` : "Correo: no identificado",
-		`Motivo: ${escapeHtml(input.reason)}`,
-		input.resolved ? "" : `Formulario de desconexión: ${formLabel}`,
+		input.lob ? `LOB: ${escapeHtml(input.lob)}` : "",
+		input.failureType ? `Tipo: ${escapeHtml(input.failureType)}` : `Motivo: ${escapeHtml(input.reason.slice(0, 200))}`,
+		input.resolved ? "" : `Formulario: ${formLabel}`,
 	].filter(Boolean).join("\n");
 }
 

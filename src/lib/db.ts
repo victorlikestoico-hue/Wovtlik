@@ -628,6 +628,8 @@ export async function notifyGroupFailureReport(input: {
 	reason: string;
 	formStatus: "yes" | "no" | "unknown";
 	resolved: boolean;
+	lob?: string;
+	failureType?: string;
 }): Promise<void> {
 	const botToken = process.env.TELEGRAM_BOT_TOKEN;
 	const chatId = process.env.TELEGRAM_CHAT_ID;
