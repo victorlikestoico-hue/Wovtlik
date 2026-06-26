@@ -261,6 +261,15 @@ const RESOLVED_REPORT_KEYWORDS = [
 	"ya está normal", "ya esta normal", "ya volvió todo", "ya volvio todo",
 ];
 
+const TL_TURNO_KEYWORDS = [
+	"tl en turno", "tl de turno", "tl de guardia", "tl activo",
+	"quien es el tl", "quién es el tl", "quien está de tl", "quién está de tl",
+	"quien esta de tl", "quien esta el tl", "quién está el tl",
+	"quien esta de guardia", "quién está de guardia", "quien está de guardia",
+	"quien es el team leader", "el tl de hoy", "que tl hay", "qué tl hay",
+	"que tl esta", "qué tl está", "quien atiende de tl", "tl disponible",
+];
+
 const fallasGroupDebounceKey = (phone: string) => `bot:fallas_group_debounce:${phone}`;
 const groupReportPendingKey = (phone: string) => `bot:group_report_pending:${phone}`;
 const groupReportDmSentKey = (phone: string) => `bot:group_report_dm_sent:${phone}`;
@@ -1098,6 +1107,31 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 	}
 	if (reportId === null) return; // sin fila persistida no podemos rastrear la confirmación
 
+	// Correo ya verificado por perfil → encolar offline directamente sin pedir confirmación
+	if (profile) {
+		if (globalSock && isSocketConnected) {
+			const settings = await getSettings().catch(() => ({} as Record<string, unknown>));
+			const spreadsheetId = (settings.offline_queue_sheet_id as string) || "";
+			if (spreadsheetId) {
+				try {
+					const queueReason = failureType
+						? `${failureType}${lob ? ` — LOB ${lob}` : ""} (reportado en grupo de fallas)`
+						: `${reason.slice(0, 100)} (reportado en grupo de fallas)`;
+					const queued = await queueAgentOffline(profile.email, queueReason, spreadsheetId);
+					await markGroupFailureReportConfirmed(reportId, queued);
+					const firstName = deriveFirstNameFromEmail(profile.email);
+					const confirmText = firstName
+						? `✅ Listo, ${firstName}: voy a cambiarte a *Fuera de línea* en los próximos 1-3 minutos. Si tenés chats activos esperá a que el sistema procese el cambio 👋`
+						: "✅ Listo: voy a cambiarte a *Fuera de línea* en los próximos 1-3 minutos.";
+					await globalSock.sendMessage(`${phone}@s.whatsapp.net`, { text: confirmText });
+				} catch (err) {
+					console.error("[fallas-group] Error procesando offline directo:", err);
+				}
+			}
+		}
+		return;
+	}
+
 	const pending: GroupReportPending = { id: reportId, email, reason, formStatus, senderName, lob, failureType };
 	await redisClient.set(groupReportPendingKey(phone), JSON.stringify(pending), "EX", GROUP_REPORT_PENDING_TTL);
 
@@ -1137,6 +1171,21 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	if (!phone) return;
 
 	const senderName = (msg.pushName as string) || phone;
+	const lower = text.toLowerCase();
+
+	// Consulta por el TL en turno → responder directamente en el grupo
+	if (TL_TURNO_KEYWORDS.some((kw) => lower.includes(kw))) {
+		if (globalSock && isSocketConnected) {
+			try {
+				await globalSock.sendMessage(msg.key.remoteJid as string, {
+					text: "Entrá acá 👇\nhttps://script.google.com/a/macros/pedidosya.com/s/AKfycby0mvlKtQACyQyd7-tTWIUN-jAWV-L95ei0rhMCzyPzCRPzwWN3NWyGCtsa2fd4oRO6/exec\n\nBuscá la pestaña 📋 *TL Activo*",
+				});
+			} catch (err) {
+				console.error("[fallas-group] Error respondiendo consulta de TL en turno:", err);
+			}
+		}
+		return;
+	}
 
 	if (isResolvedReportMessage(text)) {
 		// Limpiar cualquier confirmación pendiente: ya se resolvió solo, no tiene sentido
@@ -1159,7 +1208,6 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// un reporte en curso para este agente, cualquier mensaje suyo se suma (correo, LOB,
 	// "ayuda", etc.) aunque no repita la palabra clave — así no se pierde info repartida
 	// en varios mensajes seguidos.
-	const lower = text.toLowerCase();
 	const hasFailureKeyword = OFFLINE_KEYWORDS.some((kw) => lower.includes(kw));
 	const hasActiveReport = fallasGroupTimers.has(phone);
 	// En este grupo dedicado a reportes de fallas, señales simples (internet, luz, HC) son
