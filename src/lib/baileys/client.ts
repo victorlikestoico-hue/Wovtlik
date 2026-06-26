@@ -169,6 +169,12 @@ const OFFLINE_KEYWORDS = [
 	"no me deja entrar al hc", "hc no abre", "se traba el hc", "se traba hc",
 	"hc caído", "hc caido", "falla el hc", "falla en hc", "falla en el hc",
 	"problemas con hc", "problemas con el hc", "el hc se cayó", "el hc se cayo",
+	// Frases cortas de internet/señal que antes no matcheaban
+	"sin internet", "no tengo internet",
+	"tengo problemas de internet", "internet malo", "problemas de internet",
+	"sin señal", "sin senal", "sin servicio",
+	"no hay luz",
+	"se me cayó", "se me cayo",  // suelto: cubre "se me cayó el HC", "se me cayó el sistema", etc.
 ];
 
 const APPOINTMENT_KEYWORDS = [
@@ -1020,17 +1026,18 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	const lower = text.toLowerCase();
 	const hasFailureKeyword = OFFLINE_KEYWORDS.some((kw) => lower.includes(kw));
 	const hasActiveReport = fallasGroupTimers.has(phone);
-	if (!hasFailureKeyword && !hasActiveReport) {
-		// No matcheó ninguna keyword conocida. Si de todas formas suena a una falla real
-		// (menciona "internet", "luz", "hc", etc.), lo logueamos para revisar y ampliar
-		// OFFLINE_KEYWORDS — así un reporte real no queda invisible sin que nadie lo note.
-		const nearMissCategories = detectNearMissCategories(text);
-		if (nearMissCategories.length > 0) {
+	// En este grupo dedicado a reportes de fallas, señales simples (internet, luz, HC) son
+	// suficientes para disparar el proceso — el contexto del grupo ya garantiza que es un reporte.
+	const nearMissCategoriesForGroup = detectNearMissCategories(text);
+	const hasGroupOfflineSignal = nearMissCategoriesForGroup.includes("offline");
+	if (!hasFailureKeyword && !hasGroupOfflineSignal && !hasActiveReport) {
+		// No matcheó ninguna señal de falla. Loguear near-misses de otras categorías.
+		if (nearMissCategoriesForGroup.length > 0) {
 			logNearMissIntent({
 				conversationId: null,
 				phone,
 				message: text,
-				categories: nearMissCategories,
+				categories: nearMissCategoriesForGroup,
 			}).catch((err) => console.error("[near-miss] Error logueando intent del grupo de fallas:", err));
 		}
 		return;
