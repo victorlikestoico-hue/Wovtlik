@@ -192,6 +192,18 @@ const APPOINTMENT_KEYWORDS = [
 	"coordinar una llamada", "coordinar llamada", "coordinar una reunion", "coordinar una reunión",
 ];
 
+const HELP_KEYWORDS = [
+	"ayuda", "help", "menú", "menu", "que podes hacer", "qué podés hacer",
+	"qué hacés", "que haces", "para qué sirves", "para que sirves",
+	"qué me podés ayudar", "que me podes ayudar", "cómo funciona", "como funciona",
+	"qué puedo pedir", "que puedo pedir", "opciones", "comandos",
+];
+
+const GREETING_KEYWORDS = [
+	"hola", "buenas", "buenos días", "buenos dias", "buen día", "buen dia",
+	"buenas tardes", "buenas noches", "hey", "saludos",
+];
+
 const ABSENCE_KEYWORDS = [
 	"eliminar ausente", "eliminar mi ausente", "quitar ausente", "quitar mi ausente",
 	"borrar ausente", "borrar mi ausente", "me marcaron ausente",
@@ -298,6 +310,7 @@ type PendingIntent =
 	| "appointment" | "appointment_role" | "appointment_phone" | "appointment_date" | "appointment_time" | "appointment_name";
 const pendingIntentKey = (phone: string) => `bot:pending_intent:${phone}`;
 const PENDING_INTENT_TTL = 300; // 5 minutes
+const horasLobListKey = (phone: string) => `bot:horas_lob_list:${phone}`;
 
 // Acumula los datos parciales de una cita en construcción durante el flujo multi-turno.
 // "role" distingue si quien escribe es un agente (agenda para un tercero) o un cliente
@@ -330,6 +343,29 @@ function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
 		response: { part_1: part1, part_2: part2, part_3: part3 },
 		handoff: { required: false, reason: "" },
 	});
+}
+
+function buildMenuReply(firstName?: string): string {
+	const greeting = firstName ? `Hola ${firstName}! 👋` : "Hola! 👋";
+	return buildDirectReply(
+		`${greeting} Soy el asistente de vtlik. Puedo ayudarte con:`,
+		"📊 *Mis métricas* → escribí \"mis métricas\"\n📅 *Mis turnos* → escribí \"mis turnos\"\n✏️ *Eliminar ausente* → escribí \"eliminar ausente [fecha]\"\n🔴 *Pasarme a offline* → describí el problema (internet, luz, PC, HC)\n⏰ *Horas extra* → escribí \"horas extra\"",
+		firstName ? "" : "Para activar estas funciones respondé con tu email corporativo 📧",
+	);
+}
+
+/** Clasifica el tipo de falla a partir del texto libre del agente. */
+function classifyFailureReason(text: string): string {
+	const lower = text.toLowerCase();
+	if (lower.includes("luz") || lower.includes("energ") || lower.includes("corriente")
+		|| lower.includes("apag") || lower.includes("electric")) return "Falla de luz / energía eléctrica";
+	if (/\bpc\b/.test(lower) || lower.includes("computador") || lower.includes("equipo")
+		|| lower.includes("actualiz")) return "PC dañada o actualizando";
+	if (lower.includes(" hc") || lower.includes("hc ") || lower.includes("hc\n") || lower === "hc"
+		|| lower.startsWith("hc ")) return "Aplicativo HC no funciona";
+	if (lower.includes("internet") || lower.includes("señal") || lower.includes("conexi")
+		|| lower.includes("red ") || lower.includes("caí") || lower.includes("cai")) return "Internet / conexión caída";
+	return "Falla de conectividad";
 }
 
 function fmtPct(v: number | null): string {
@@ -366,7 +402,9 @@ function vsObjective(
 	const meetsTarget =
 		condition === ">=" ? v >= target :
 		condition === "<=" ? v <= target : v >= target;
-	return meetsTarget ? " ✅" : " ❌";
+	if (meetsTarget) return " ✅";
+	const targetLabel = isTime ? fmtAht(target) : fmtPct(target <= 1 ? target * 100 : target);
+	return ` ❌ (obj: ${targetLabel})`;
 }
 
 async function tryIssueLookupReply(caseId: string): Promise<string | null> {
@@ -446,11 +484,36 @@ async function tryScheduleReply(phone: string): Promise<string | null> {
 		}
 
 		const firstName = deriveFirstNameFromEmail(profile.email);
+
+		// Detectar el próximo turno futuro comparando fechas
+		const nowArg = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }));
+		nowArg.setHours(0, 0, 0, 0);
+		let nextShiftIdx = -1;
+		let minDiff = Infinity;
+		for (const [i, s] of shifts.entries()) {
+			const raw = s.fecha || "";
+			let d: Date | null = null;
+			let m = raw.match(/(\d{4})-(\d{2})-(\d{2})/);
+			if (m) d = new Date(`${m[1]}-${m[2]}-${m[3]}`);
+			else {
+				m = raw.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?/);
+				if (m) {
+					const yr = m[3] || String(nowArg.getFullYear());
+					d = new Date(`${yr}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`);
+				}
+			}
+			if (d) {
+				const diff = d.getTime() - nowArg.getTime();
+				if (diff >= 0 && diff < minDiff) { minDiff = diff; nextShiftIdx = i; }
+			}
+		}
+
 		const lines = [`📅 *${firstName ? `${firstName}, tus` : "Tus"} turnos*`];
-		for (const s of shifts) {
+		for (const [i, s] of shifts.entries()) {
 			const parts = [s.fecha, s.horario, s.estado].filter(Boolean).join(" · ");
 			const novedad = s.novedades ? ` — ${s.novedades}` : "";
-			lines.push(`${parts}${novedad}`);
+			const marker = i === nextShiftIdx ? " ← *próximo*" : "";
+			lines.push(`${parts}${novedad}${marker}`);
 		}
 		return buildDirectReply(lines.join("\n"));
 	} catch (err) {
@@ -499,18 +562,35 @@ async function tryHorasDisponiblesReply(phone: string, message: string): Promise
 		}
 
 		const knownLobs = [...new Set(entries.map((e) => e.lob).filter(Boolean))];
-		const requestedLob = matchLobFromMessage(message, knownLobs);
+
+		// Aceptar respuesta numérica cuando el bot previamente listó los LOBs numerados
+		let requestedLob = matchLobFromMessage(message, knownLobs);
+		if (!requestedLob) {
+			const numMatch = message.trim().match(/^(\d+)$/);
+			if (numMatch) {
+				const storedList = await redisClient.get(horasLobListKey(phone));
+				if (storedList) {
+					const lobList: string[] = JSON.parse(storedList);
+					const idx = parseInt(numMatch[1], 10) - 1;
+					if (idx >= 0 && idx < lobList.length) requestedLob = lobList[idx];
+				}
+			}
+		}
 
 		if (!requestedLob) {
 			await redisClient.set(pendingIntentKey(phone), "horas_lob", "EX", PENDING_INTENT_TTL);
+			await redisClient.set(horasLobListKey(phone), JSON.stringify(knownLobs), "EX", PENDING_INTENT_TTL);
+			const NUMERAL_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
+			const lobOptions = knownLobs.map((lob, i) => `${NUMERAL_EMOJIS[i] ?? `${i + 1}.`} ${lob}`).join("\n");
 			return buildDirectReply(
 				"¿Para qué LOB querés consultar las horas disponibles? 🤔",
-				`Hoy hay horas sin cubrir en: ${knownLobs.join(", ")}`,
-				"Respondé con el nombre del LOB.",
+				lobOptions,
+				"Respondé con el número o el nombre del LOB.",
 			);
 		}
 
 		await redisClient.del(pendingIntentKey(phone));
+		await redisClient.del(horasLobListKey(phone));
 		const slots = entries.filter((e) => e.lob === requestedLob);
 		const lines = [`⏰ *Horas sin cubrir · ${requestedLob}*`];
 		for (const s of slots) {
@@ -528,20 +608,44 @@ async function tryHorasDisponiblesReply(phone: string, message: string): Promise
 function parseDateFromMessage(text: string): string | undefined {
 	const lower = text.toLowerCase();
 
+	const nowArg = (): Date => new Date(
+		new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }),
+	);
+
 	// "hoy" → fecha de hoy en Argentina
-	if (/\bhoy\b/.test(lower)) {
-		return new Date(
-			new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }),
-		).toISOString().slice(0, 10);
+	if (/\bhoy\b/.test(lower)) return nowArg().toISOString().slice(0, 10);
+
+	// "ayer" → fecha de ayer en Argentina
+	if (/\bayer\b/.test(lower)) {
+		const d = nowArg();
+		d.setDate(d.getDate() - 1);
+		return d.toISOString().slice(0, 10);
 	}
 
 	// "mañana" / "manana" → fecha de mañana en Argentina
 	if (/\bma[nñ]ana\b/.test(lower)) {
-		const d = new Date(
-			new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }),
-		);
+		const d = nowArg();
 		d.setDate(d.getDate() + 1);
 		return d.toISOString().slice(0, 10);
+	}
+
+	// "el lunes", "el martes", etc. → ocurrencia pasada más reciente de ese día
+	const DAY_NAMES: Record<string, number> = {
+		domingo: 0, lunes: 1, martes: 2, miercoles: 3, miércoles: 3,
+		jueves: 4, viernes: 5, sabado: 6, sábado: 6,
+	};
+	const dayMatch = lower.match(/\b(?:el\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/);
+	if (dayMatch) {
+		const key = dayMatch[1].normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+		const targetDay = DAY_NAMES[key];
+		if (targetDay !== undefined) {
+			const today = nowArg();
+			const todayDay = today.getDay();
+			let diff = todayDay - targetDay;
+			if (diff <= 0) diff += 7; // semana anterior si es el mismo día o futuro
+			today.setDate(today.getDate() - diff);
+			return today.toISOString().slice(0, 10);
+		}
 	}
 
 	// DD/MM/YYYY or DD-MM-YYYY
@@ -550,9 +654,7 @@ function parseDateFromMessage(text: string): string | undefined {
 	// DD/MM or DD-MM (assume current year, Argentina time)
 	m = text.match(/\b(\d{1,2})[\/\-](\d{1,2})\b/);
 	if (m) {
-		const year = new Date(
-			new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }),
-		).getFullYear();
+		const year = nowArg().getFullYear();
 		return `${year}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
 	}
 	return undefined;
@@ -921,8 +1023,8 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 			const firstName = deriveFirstNameFromEmail(profile.email);
 			return buildDirectReply(
 				firstName ? `✅ Listo, ${firstName}` : "✅ Solicitud recibida",
-				"Voy a cambiarte a *Fuera de línea* en los próximos 1-3 minutos.",
-				"Si tenés chats activos esperá a que el sistema procese el cambio.",
+				`Motivo registrado: _${reason}_`,
+				"Cambiándote a *Fuera de línea* en los próximos 1-3 minutos. Si tenés chats activos esperá a que el sistema procese el cambio.",
 			);
 		}
 		return buildDirectReply("No pude registrar la solicitud en este momento. Intentá de nuevo o contactá al TL.");
@@ -975,12 +1077,17 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 
 	if (!(globalSock && isSocketConnected)) return;
 
-	const formNote = formStatus === "yes" ? "✅ sí" : formStatus === "no" ? "⚠️ no" : "no detectado";
+	const failureType = classifyFailureReason(reason);
+	const formNote = formStatus === "yes"
+		? "✅ sí"
+		: formStatus === "no"
+			? "⚠️ no — si podés llenarlo antes del cambio avisame"
+			: "no detectado — si lo llenaste mencionalo en tu respuesta";
 	const firstName = email ? deriveFirstNameFromEmail(email) : "";
 	const recap = [
-		firstName ? `Hola ${firstName}, vi tu reporte en el grupo de fallas 👀` : "Vi tu reporte en el grupo de fallas 👀",
-		email ? `Correo: ${email}` : "No identifiqué tu correo — respondé acá con tu correo corporativo para poder gestionarlo.",
-		`Motivo: ${reason.slice(0, 300)}`,
+		firstName ? `Hola ${firstName}, vi tu reporte en el grupo 👀` : "Vi tu reporte en el grupo de fallas 👀",
+		`Tipo de falla: *${failureType}*`,
+		email ? `Correo: ${email}` : "⚠️ No identifiqué tu correo — respondé acá con tu email corporativo para poder gestionarlo.",
 		`Formulario de desconexión: ${formNote}`,
 		email ? '¿Es correcto? Respondé "sí" para que te cambie a *Fuera de línea*.' : "",
 	].filter(Boolean).join("\n");
@@ -1416,6 +1523,28 @@ export const inboundHandler = createInboundHandler({
 				if ((matchesAbsenceIntent(msgLower) || isAbsenceDateFollowUp) && conv) {
 					const reply = await tryRemoveAbsenceReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
+				}
+
+				// Menú / ayuda
+				if (HELP_KEYWORDS.some((kw) => msgLower.includes(kw)) && conv) {
+					const agentProfile = await getAgentProfile(conv.phone);
+					const firstName = agentProfile ? deriveFirstNameFromEmail(agentProfile.email) : undefined;
+					return buildMenuReply(firstName);
+				}
+
+				// Saludo de agente no registrado → bienvenida + pedir email
+				if (conv && GREETING_KEYWORDS.some((kw) =>
+					msgLower === kw || msgLower.startsWith(`${kw} `) ||
+					msgLower.startsWith(`${kw}!`) || msgLower.startsWith(`${kw},`)
+				)) {
+					const agentProfile = await getAgentProfile(conv.phone);
+					if (!agentProfile) {
+						return buildDirectReply(
+							"Hola! 👋 Soy el asistente de vtlik.",
+							"Puedo ayudarte con métricas 📊, turnos 📅, ausencias ✏️, cambio de estado 🔴 y horas extra ⏰.",
+							"Para activar estas funciones respondé con tu email corporativo, ej: \"luis@pedidosya.com\"",
+						);
+					}
 				}
 
 				// Si llegamos hasta acá, ningún intent de arriba matcheó. Si el mensaje de todas
