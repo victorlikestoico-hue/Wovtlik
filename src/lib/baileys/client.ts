@@ -49,6 +49,7 @@ import {
 	saveAgentProfile,
 	saveCrmTask,
 	notifyGroupFailureReport,
+	notifyBotDisconnected,
 	logNearMissIntent,
 	insertGroupFailureReport,
 	markGroupFailureReportConfirmed,
@@ -1452,6 +1453,8 @@ let isSocketConnected = false;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let outboxInterval: NodeJS.Timeout | null = null;
 let profilePicInterval: NodeJS.Timeout | null = null;
+let disconnectionAlertTimer: NodeJS.Timeout | null = null;
+const DISCONNECTION_ALERT_MINUTES = 10;
 
 // Creamos el Inbound Handler inyectando las dependencias necesarias
 export const inboundHandler = createInboundHandler({
@@ -1961,6 +1964,10 @@ export async function startWASocket() {
 		// 3. Estado de conexión: open (conectado)
 		if (connection === "open") {
 			isSocketConnected = true;
+			if (disconnectionAlertTimer) {
+				clearTimeout(disconnectionAlertTimer);
+				disconnectionAlertTimer = null;
+			}
 			console.log("[bot] Conexión abierta con éxito.");
 			const rawId = sock.user?.id || "";
 			const selfName = typeof sock.user?.name === "string" ? sock.user.name.trim() : "";
@@ -2037,6 +2044,14 @@ export async function startWASocket() {
 		if (connection === "close") {
 			isSocketConnected = false;
 			stopOutboxProcessor();
+			if (!disconnectionAlertTimer) {
+				disconnectionAlertTimer = setTimeout(() => {
+					disconnectionAlertTimer = null;
+					void notifyBotDisconnected(DISCONNECTION_ALERT_MINUTES).catch((err) => {
+						console.error("[bot] Error enviando alerta de desconexión a Telegram:", err);
+					});
+				}, DISCONNECTION_ALERT_MINUTES * 60 * 1000);
+			}
 			const status = (lastDisconnect?.error as any)?.output?.statusCode || 0;
 			console.log(`[bot] Conexión cerrada. Status code: ${status}`);
 

@@ -643,6 +643,17 @@ export async function notifyGroupFailureReport(input: {
 	await notifier.notifyGroupFailureReport(input);
 }
 
+export async function notifyBotDisconnected(minutesDisconnected: number): Promise<void> {
+	const botToken = process.env.TELEGRAM_BOT_TOKEN;
+	const chatId = process.env.TELEGRAM_CHAT_ID;
+	const notifier = createTelegramNotifier({
+		botToken,
+		chatId,
+		fetch: globalThis.fetch as any,
+	});
+	await notifier.notifyBotDisconnected({ minutesDisconnected });
+}
+
 // 24. updateConversation(id, patch)
 export async function updateConversation(
 	id: number,

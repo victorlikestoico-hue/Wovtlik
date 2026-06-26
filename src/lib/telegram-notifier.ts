@@ -40,6 +40,10 @@ export interface AppointmentReminderNotificationInput {
 	description: string | null;
 }
 
+export interface BotDisconnectedNotificationInput {
+	minutesDisconnected: number;
+}
+
 export interface GroupFailureReportNotificationInput {
 	phone: string;
 	senderName: string;
@@ -124,6 +128,16 @@ export function formatAppointmentReminderNotification(
 	].filter(Boolean).join("\n");
 }
 
+export function formatBotDisconnectedNotification(
+	input: BotDisconnectedNotificationInput,
+): string {
+	return [
+		"🔴 <b>Bot desconectado</b>",
+		`El bot lleva más de ${input.minutesDisconnected} minutos sin conectarse a WhatsApp.`,
+		"Revisá los logs en Railway para más detalles.",
+	].join("\n");
+}
+
 export function formatGroupFailureReportNotification(
 	input: GroupFailureReportNotificationInput,
 ): string {
@@ -203,6 +217,9 @@ export function createTelegramNotifier(config: TelegramNotifierConfig) {
 		},
 		notifyGroupFailureReport(input: GroupFailureReportNotificationInput) {
 			return sendText(formatGroupFailureReportNotification(input));
+		},
+		notifyBotDisconnected(input: BotDisconnectedNotificationInput) {
+			return sendText(formatBotDisconnectedNotification(input));
 		},
 	};
 }
