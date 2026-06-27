@@ -270,6 +270,16 @@ const TL_TURNO_KEYWORDS = [
 	"que tl esta", "qué tl está", "quien atiende de tl", "tl disponible",
 ];
 
+/** Detecta si un mensaje en el grupo es una consulta/saludo dirigido al TL en turno. */
+function matchesTlTurnoQuery(lower: string): boolean {
+	// "TL de [LOB]": cubre "TL de AJ", "TL de Fraude", "TL de turno", etc.
+	if (lower.includes("tl de ")) return true;
+	// Saludo dirigido al TL: "buenas tardes TL", "buenas noches TL"
+	if (/\btl\b/.test(lower) && /buenas?\s+(noches?|tardes?|d[ií]as?)/i.test(lower)) return true;
+	// Otras frases de búsqueda directa
+	return TL_TURNO_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
 const fallasGroupDebounceKey = (phone: string) => `bot:fallas_group_debounce:${phone}`;
 const groupReportPendingKey = (phone: string) => `bot:group_report_pending:${phone}`;
 const groupReportDmSentKey = (phone: string) => `bot:group_report_dm_sent:${phone}`;
@@ -1174,7 +1184,7 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	const lower = text.toLowerCase();
 
 	// Consulta por el TL en turno → responder directamente en el grupo
-	if (TL_TURNO_KEYWORDS.some((kw) => lower.includes(kw))) {
+	if (matchesTlTurnoQuery(lower)) {
 		if (globalSock && isSocketConnected) {
 			try {
 				await globalSock.sendMessage(msg.key.remoteJid as string, {
