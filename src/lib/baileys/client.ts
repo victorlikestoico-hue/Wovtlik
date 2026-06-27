@@ -1117,19 +1117,21 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 	}
 	if (reportId === null) return; // sin fila persistida no podemos rastrear la confirmación
 
-	// Correo ya verificado por perfil → encolar offline directamente sin pedir confirmación
-	if (profile) {
+	// Correo ya verificado por perfil, o correo detectado en texto con motivo claro
+	// → encolar offline directamente sin pedir confirmación
+	if (profile || (email && failureType)) {
 		if (globalSock && isSocketConnected) {
 			const settings = await getSettings().catch(() => ({} as Record<string, unknown>));
 			const spreadsheetId = (settings.offline_queue_sheet_id as string) || "";
 			if (spreadsheetId) {
 				try {
+					const resolvedEmail = profile ? profile.email : email!;
 					const queueReason = failureType
 						? `${failureType}${lob ? ` — LOB ${lob}` : ""} (reportado en grupo de fallas)`
 						: `${reason.slice(0, 100)} (reportado en grupo de fallas)`;
-					const queued = await queueAgentOffline(profile.email, queueReason, spreadsheetId);
+					const queued = await queueAgentOffline(resolvedEmail, queueReason, spreadsheetId);
 					await markGroupFailureReportConfirmed(reportId, queued);
-					const firstName = deriveFirstNameFromEmail(profile.email);
+					const firstName = deriveFirstNameFromEmail(resolvedEmail);
 					const confirmText = firstName
 						? `✅ Listo, ${firstName}: voy a cambiarte a *Fuera de línea* en los próximos 1-3 minutos. Si tenés chats activos esperá a que el sistema procese el cambio 👋`
 						: "✅ Listo: voy a cambiarte a *Fuera de línea* en los próximos 1-3 minutos.";
