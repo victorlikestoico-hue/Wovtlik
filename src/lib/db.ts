@@ -440,12 +440,13 @@ export async function enqueueOutbox(
 		media_type?: "text" | "image" | "audio" | "unknown";
 		media_url?: string | null;
 		metadata?: Record<string, unknown>;
+		send_after?: Date | null;
 	} = {},
 ): Promise<any> {
 	await ensureSchemaInitialized();
 	const res = await pool.query(
-		`INSERT INTO outbox (conversation_id, phone, content, media_type, media_url, metadata, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())
+		`INSERT INTO outbox (conversation_id, phone, content, media_type, media_url, metadata, send_after, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, NOW())
 		 RETURNING *`,
 		[
 			conversationId,
@@ -454,6 +455,7 @@ export async function enqueueOutbox(
 			options.media_type ?? "text",
 			options.media_url ?? null,
 			JSON.stringify(options.metadata ?? {}),
+			options.send_after ?? null,
 		],
 	);
 	return res.rows[0];
@@ -466,12 +468,55 @@ export async function getPendingOutbox(limit = 20): Promise<any[]> {
 		`SELECT o.*, c.jid AS conversation_jid, c.phone AS conversation_phone
 		 FROM outbox o
 		 LEFT JOIN conversations c ON c.id = o.conversation_id
-		 WHERE o.sent = 0
+		 WHERE o.sent = 0 AND (o.send_after IS NULL OR o.send_after <= NOW())
 		 ORDER BY o.created_at ASC
 		 LIMIT $1`,
 		[limit]
 	);
 	return res.rows;
+}
+
+// Broadcast agent management
+export async function listFormAgents(): Promise<Array<{ id: number; name: string; phone: string; created_at: Date }>> {
+	await ensureSchemaInitialized();
+	const res = await pool.query("SELECT * FROM form_agents ORDER BY created_at ASC");
+	return res.rows;
+}
+
+export async function addFormAgent(name: string, phone: string): Promise<{ id: number; name: string; phone: string; created_at: Date }> {
+	await ensureSchemaInitialized();
+	const res = await pool.query(
+		"INSERT INTO form_agents (name, phone) VALUES ($1, $2) RETURNING *",
+		[name.trim(), phone.replace(/\D/g, "")],
+	);
+	return res.rows[0];
+}
+
+export async function deleteFormAgent(id: number): Promise<boolean> {
+	await ensureSchemaInitialized();
+	const res = await pool.query("DELETE FROM form_agents WHERE id = $1", [id]);
+	return (res.rowCount ?? 0) > 0;
+}
+
+export async function listBroadcastAgents(): Promise<Array<{ id: number; name: string; phone: string; created_at: Date }>> {
+	await ensureSchemaInitialized();
+	const res = await pool.query("SELECT * FROM broadcast_agents ORDER BY created_at ASC");
+	return res.rows;
+}
+
+export async function addBroadcastAgent(name: string, phone: string): Promise<{ id: number; name: string; phone: string; created_at: Date }> {
+	await ensureSchemaInitialized();
+	const res = await pool.query(
+		"INSERT INTO broadcast_agents (name, phone) VALUES ($1, $2) RETURNING *",
+		[name.trim(), phone.replace(/\D/g, "")],
+	);
+	return res.rows[0];
+}
+
+export async function deleteBroadcastAgent(id: number): Promise<boolean> {
+	await ensureSchemaInitialized();
+	const res = await pool.query("DELETE FROM broadcast_agents WHERE id = $1", [id]);
+	return (res.rowCount ?? 0) > 0;
 }
 
 // 19. markOutboxSent(id)

@@ -55,6 +55,7 @@ type Tab =
 	| "contacts"
 	| "analytics"
 	| "fallas"
+	| "broadcasts"
 	| "settings";
 
 interface SidebarProps {
@@ -141,7 +142,7 @@ const primaryItems: NavItem[] = [
 	{ type: "tab", value: "dashboard", label: "Dashboard", icon: LayoutDashboard },
 	{ type: "tab", value: "analytics", label: "Analytics", icon: FileClock },
 	{ type: "tab", value: "chats", label: "Conversaciones", icon: MessagesSquare },
-	{ type: "placeholder", label: "Campaigns", icon: Megaphone, badge: "DEV" },
+	{ type: "tab", value: "broadcasts", label: "Envíos masivos", icon: Megaphone },
 ];
 
 const workspaceItems: NavItem[] = [

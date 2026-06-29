@@ -12,6 +12,7 @@ import { startAppointmentsCron } from "./appointments-cron.ts";
 import { startOfflineResultsCron } from "./offline-results-cron.ts";
 import { startFallasTemplateCron } from "./fallas-template-cron.ts";
 import { startHorasCubrirCron } from "./horas-cubrir-cron.ts";
+import { startFormBroadcastCron } from "./form-broadcast-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -40,6 +41,9 @@ async function main() {
 
 	// Anuncio cada 1h en el grupo "Anuncios Horas CS" de los LOBs con horas extra sin cubrir
 	startHorasCubrirCron();
+
+	// Formulario mensual: envía el link a todos los agentes el día 2 y el día 7 de cada mes a las 9h Colombia
+	startFormBroadcastCron();
 
 	// Loop de polling para la desconexión / reinicio manual controlado desde el frontend
 	setInterval(async () => {
