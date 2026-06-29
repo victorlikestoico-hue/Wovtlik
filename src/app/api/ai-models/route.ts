@@ -10,10 +10,19 @@ const PROVIDER_BASE_URL: Record<Provider, string> = {
 	deepseek: "https://api.deepseek.com",
 };
 
+function capabilityBaseUrl(provider: Provider, capability: Capability): string {
+	if (provider === "openai") {
+		if (capability === "audio" && process.env.AUDIO_AI_BASE_URL) return process.env.AUDIO_AI_BASE_URL.replace(/\/$/, "");
+		if (capability === "image" && process.env.IMAGE_AI_BASE_URL) return process.env.IMAGE_AI_BASE_URL.replace(/\/$/, "");
+		if (capability === "chat" && process.env.CHAT_AI_BASE_URL) return process.env.CHAT_AI_BASE_URL.replace(/\/$/, "");
+	}
+	return PROVIDER_BASE_URL[provider];
+}
+
 const FALLBACK_MODELS: Record<Provider, Record<Capability, string[]>> = {
 	openai: {
 		chat: ["gpt-4o-mini", "gpt-4o"],
-		audio: ["gpt-4o-transcribe", "whisper-1"],
+		audio: ["whisper-large-v3", "whisper-large-v3-turbo", "gpt-4o-transcribe", "whisper-1"],
 		image: ["gpt-4o-mini", "gpt-4o"],
 	},
 	google: {
@@ -93,7 +102,8 @@ async function fetchOpenAiCompatibleModels(
 	apiKey: string,
 	capability: Capability,
 ) {
-	const response = await fetch(`${PROVIDER_BASE_URL[provider]}/models`, {
+	const baseUrl = capabilityBaseUrl(provider, capability);
+	const response = await fetch(`${baseUrl}/models`, {
 		headers: { authorization: `Bearer ${apiKey}` },
 	});
 	if (!response.ok) throw new Error(`${provider}_models_http_${response.status}`);
