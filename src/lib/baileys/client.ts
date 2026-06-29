@@ -19,6 +19,7 @@ import {
 	describeImage,
 	transcribeAudio,
 } from "../ai-providers.ts";
+import { getCachedResponse, isCacheable, setCachedResponse } from "../response-cache.ts";
 import { qualifyLeadAndCreateSuggestions } from "../ai-qualification-service.ts";
 import {
 	getConnectionState,
@@ -1552,6 +1553,8 @@ export const inboundHandler = createInboundHandler({
 		// Si el número ya está identificado como agente registrado, se inyecta en el
 		// prompt para que la IA lo trate por su nombre y no vuelva a pedirle el correo.
 		let identityContext = "";
+		let _cacheQuestion = "";
+		let _useCache = false;
 		try {
 			// Extract last user message from history + queued
 			const allMessages = [
@@ -1570,6 +1573,9 @@ export const inboundHandler = createInboundHandler({
 			// Determine if this is a 1-on-1 conversation (not a group)
 			const conv = await getConversationById(input.conversationId);
 			const isGroup = conv?.jid?.endsWith("@g.us") ?? false;
+
+			_cacheQuestion = lastUserMsg;
+			_useCache = !isGroup && !isMediaSystemNote;
 
 			if (!isGroup && conv) {
 				const identifiedProfile = await getAgentProfile(conv.phone);
@@ -1704,6 +1710,15 @@ export const inboundHandler = createInboundHandler({
 			console.error("[dashbig] Intent detection error, falling back to DeepSeek:", err);
 		}
 
+		// Respuesta en caché para consultas informativas frecuentes
+		if (_useCache && isCacheable(_cacheQuestion)) {
+			const cachedReply = await getCachedResponse(redisClient, _cacheQuestion);
+			if (cachedReply) {
+				console.log("[qa-cache] Hit:", _cacheQuestion.slice(0, 60));
+				return cachedReply;
+			}
+		}
+
 		const settings = await getSettings();
 		const chatClient = createConfiguredChatClient(settings);
 		const colombiaDate = new Date().toLocaleString("es-CO", {
@@ -1728,6 +1743,16 @@ export const inboundHandler = createInboundHandler({
 			// que detiene el indicador "escribiendo..." y registra el evento en DB.
 			console.warn(`[bot] generateNormalReply falló (${res.reason}); delegando a path ai_invalid_json.`);
 			return `{"_deepseek_error":${JSON.stringify(res.reason)}}`;
+		}
+		// Guardar en caché si es respuesta informativa sin handoff
+		if (_useCache && isCacheable(_cacheQuestion)) {
+			try {
+				const parsed = JSON.parse(res.rawContent);
+				if (!parsed?.handoff?.required) {
+					await setCachedResponse(redisClient, _cacheQuestion, res.rawContent);
+					console.log("[qa-cache] Guardado:", _cacheQuestion.slice(0, 60));
+				}
+			} catch { /* no interrumpir el flujo */ }
 		}
 		return res.rawContent;
 	},
