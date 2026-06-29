@@ -648,6 +648,20 @@ async function tryHorasDisponiblesReply(phone: string, message: string): Promise
 	}
 }
 
+/** Returns true if the given YYYY-MM-DD date falls within the current Mon–Sun week in Argentina time. */
+function isInCurrentWeekAR(dateISO: string): boolean {
+	const nowAR = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }));
+	const daysFromMonday = nowAR.getDay() === 0 ? 6 : nowAR.getDay() - 1;
+	const monday = new Date(nowAR);
+	monday.setDate(nowAR.getDate() - daysFromMonday);
+	monday.setHours(0, 0, 0, 0);
+	const sunday = new Date(monday);
+	sunday.setDate(monday.getDate() + 6);
+	sunday.setHours(23, 59, 59, 999);
+	const target = new Date(dateISO + "T00:00:00");
+	return target >= monday && target <= sunday;
+}
+
 /** Parse a date from the message and return YYYY-MM-DD, or undefined if none found */
 function parseDateFromMessage(text: string): string | undefined {
 	const lower = text.toLowerCase();
@@ -986,6 +1000,14 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 
 	// Date received — clear pending state
 	await redisClient.del(absencePendingKey(phone));
+
+	if (!isInCurrentWeekAR(targetDate)) {
+		return buildDirectReply(
+			"⚠️ Solo podés eliminar ausentes de la semana actual directamente acá.",
+			"Para ausencias de semanas anteriores completá el siguiente formulario:",
+			"https://docs.google.com/forms/d/e/1FAIpQLSeQchP9yHLO7s2w48k0SN3dS-p-ibVzkw9MQJIDLIrsww8LHQ/viewform",
+		);
+	}
 
 	try {
 		const result = await clearAgentAbsence(profile.email, ids, targetDate);
