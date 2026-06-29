@@ -381,6 +381,9 @@ export async function transcribeAudio(input: {
 	requireProvider(provider, "audio");
 
 	if (providerName === "google") {
+		// Gemini no acepta audio/ogg — remapear al formato compatible más cercano
+		const rawMime = input.mimeType || "audio/ogg";
+		const geminiMime = rawMime.startsWith("audio/ogg") ? "audio/webm" : rawMime;
 		const response = await fetch(
 			`${provider.baseUrl}/models/${provider.model}:generateContent?key=${encodeURIComponent(provider.apiKey)}`,
 			{
@@ -392,7 +395,7 @@ export async function transcribeAudio(input: {
 							parts: [
 								{
 									inline_data: {
-										mime_type: input.mimeType || "audio/ogg",
+										mime_type: geminiMime,
 										data: input.buffer.toString("base64"),
 									},
 								},
@@ -403,7 +406,10 @@ export async function transcribeAudio(input: {
 				}),
 			},
 		);
-		if (!response.ok) throw new Error(`audio_ai_http_${response.status}`);
+		if (!response.ok) {
+			const errBody = await response.text().catch(() => "");
+			throw new Error(`audio_ai_http_${response.status}: ${errBody.slice(0, 300)}`);
+		}
 		const payload = await response.json();
 		const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
 		if (typeof text === "string" && text.trim()) return text.trim();
