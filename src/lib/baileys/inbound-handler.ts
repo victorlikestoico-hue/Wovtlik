@@ -6,6 +6,7 @@ import {
 	type ConversationMode,
 	type MessageRole,
 } from "../../domain/whatsapp-rules.ts";
+import { getTLEnTurno, normalizeLOB } from "../tl-guardia.ts";
 import type {
 	ConversationEventRow,
 	ConversationEventType,
@@ -278,6 +279,54 @@ function shouldRefreshProfilePicture(
 			: new Date(conversation.profile_picture_fetched_at);
 	if (Number.isNaN(fetchedAt.getTime())) return true;
 	return now.getTime() - fetchedAt.getTime() > 24 * 60 * 60 * 1000;
+}
+
+const TL_QUERY_RE = /\b(tl\b|team\s*leader|tl\s+en\s+turno|tl\s+de\s+guardia|quien\s+es\s+el\s+tl|qu[ée]n\s+es\s+el\s+tl|guardia)\b/i;
+const LOB_DETECT: Array<{ re: RegExp; lob: string }> = [
+	{ re: /\b(cs\s*live|cs)\b/i,                 lob: "cs" },
+	{ re: /\b(sm|social\s*media)\b/i,            lob: "sm" },
+	{ re: /\bpo\b|\bpago\s*online\b/i,           lob: "po" },
+	{ re: /\bgo\b|\bgesti[oó]n\s*offline\b/i,    lob: "go" },
+	{ re: /\bov\b|\bovernight\b/i,               lob: "ov" },
+];
+
+async function resolveTLInjection(
+	history: HistoryMessage[],
+	queued: Array<{ text: string }>,
+): Promise<string> {
+	const texts = [
+		...history.slice(-6).map(h => h.content),
+		...queued.map(q => q.text),
+	];
+	const hasTLQuery = texts.some(t => TL_QUERY_RE.test(t));
+	if (!hasTLQuery) return "";
+
+	let detectedLob: string | null = null;
+	for (const t of texts) {
+		for (const { re, lob } of LOB_DETECT) {
+			if (re.test(t)) { detectedLob = lob; break; }
+		}
+		if (detectedLob) break;
+	}
+	if (!detectedLob) return ""; // AI pedirá el LOB según el prompt
+
+	const normalized = normalizeLOB(detectedLob);
+	if (!normalized) return "";
+
+	const result = await getTLEnTurno(normalized);
+
+	if (!result.found) {
+		if (result.reason === "no_column") {
+			return `\n\n## DATO EN TIEMPO REAL — TL en turno\nLOB: ${detectedLob.toUpperCase()}\nNo hay TL asignado en el sheet para este LOB.`;
+		}
+		return "";
+	}
+
+	if (result.isRotacion) {
+		return `\n\n## DATO EN TIEMPO REAL — TL en turno\nLOB: ${detectedLob.toUpperCase()}\nEl slot actual figura como "Rotación" — indicá al agente que consulte el sheet directamente.`;
+	}
+
+	return `\n\n## DATO EN TIEMPO REAL — TL en turno\nLOB: ${detectedLob.toUpperCase()}\nTL asignado ahora: ${result.name}\nHasta las: ${result.finUY} (hora Uruguay) / ${result.finCOL} (hora Colombia)`;
 }
 
 export function createInboundHandler(deps: InboundHandlerDeps) {
@@ -608,10 +657,11 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 				return msg;
 			});
 
+			const tlInjection = await resolveTLInjection(mappedHistory, mappedQueuedMessages);
 			const rawReply = await deps.callDeepSeek({
 				conversationId: beforeConversation.id,
 				history: mappedHistory,
-				systemPrompt,
+				systemPrompt: systemPrompt + tlInjection,
 				queuedMessages: mappedQueuedMessages,
 			});
 			const parsed = parseNormalReply(rawReply);
