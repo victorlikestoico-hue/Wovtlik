@@ -1561,6 +1561,12 @@ export const inboundHandler = createInboundHandler({
 			const lastUserMsg = [...allMessages].reverse().find((m) => m.role === "user")?.content ?? "";
 			const msgLower = lastUserMsg.toLowerCase();
 
+			// Si el último mensaje es una nota de sistema de media (audio/imagen que no pudo
+			// procesarse), los atajos de keywords no aplican — ir directo a DeepSeek.
+			const isMediaSystemNote =
+				lastUserMsg.startsWith("Nota de voz recibida. Nota de sistema:") ||
+				lastUserMsg.startsWith("[Imagen] (Nota de sistema:");
+
 			// Determine if this is a 1-on-1 conversation (not a group)
 			const conv = await getConversationById(input.conversationId);
 			const isGroup = conv?.jid?.endsWith("@g.us") ?? false;
@@ -1573,7 +1579,7 @@ export const inboundHandler = createInboundHandler({
 				}
 			}
 
-			if (!isGroup) {
+			if (!isGroup && !isMediaSystemNote) {
 				// Confirmación de un reporte capturado en el grupo de fallas — tiene prioridad
 				// sobre cualquier otro intent mientras esté pendiente (le acabamos de preguntar algo puntual).
 				if (conv) {
