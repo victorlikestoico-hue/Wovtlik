@@ -1189,9 +1189,24 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	if (matchesTlTurnoQuery(lower)) {
 		if (globalSock && isSocketConnected) {
 			try {
-				await globalSock.sendMessage(msg.key.remoteJid as string, {
-					text: "Entrá acá 👇\nhttps://script.google.com/a/macros/pedidosya.com/s/AKfycby0mvlKtQACyQyd7-tTWIUN-jAWV-L95ei0rhMCzyPzCRPzwWN3NWyGCtsa2fd4oRO6/exec\n\nBuscá la pestaña 📋 *TL Activo*",
-				});
+				const TARGET_LOBS = ["po", "cs", "go", "sm", "ov"];
+				// Detectar si el mensaje menciona explícitamente uno de los LOBs objetivo
+				// (ej: "TL de PO", "quien es el TL de CS")
+				const mentionsTargetLob = TARGET_LOBS.some((lob) =>
+					new RegExp(`\\b${lob}\\b`, "i").test(lower),
+				);
+				// Si no viene del texto, verificar el LOB registrado en el perfil del agente
+				let profileLobMatches = false;
+				if (!mentionsTargetLob && phone) {
+					const profile = await getAgentProfile(phone).catch(() => null);
+					if (profile?.lob) {
+						profileLobMatches = TARGET_LOBS.includes(profile.lob.toLowerCase().trim());
+					}
+				}
+				const replyText = (mentionsTargetLob || profileLobMatches)
+					? "Entrá acá 👇\nhttps://docs.google.com/spreadsheets/d/1ibitR7_af77BIlRMevmCkWdcNCLWji5yiPBOwXlbE0s/edit?gid=176485234#gid=176485234"
+					: "Entrá acá 👇\nhttps://script.google.com/a/macros/pedidosya.com/s/AKfycby0mvlKtQACyQyd7-tTWIUN-jAWV-L95ei0rhMCzyPzCRPzwWN3NWyGCtsa2fd4oRO6/exec\n\nBuscá la pestaña 📋 *TL Activo*";
+				await globalSock.sendMessage(msg.key.remoteJid as string, { text: replyText });
 			} catch (err) {
 				console.error("[fallas-group] Error respondiendo consulta de TL en turno:", err);
 			}
