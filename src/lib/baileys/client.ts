@@ -1057,7 +1057,7 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 		await redisClient.set(pendingIntentKey(phone), "offline", "EX", PENDING_INTENT_TTL);
 		return buildDirectReply(
 			"Para gestionar tu estado necesito tu email corporativo 📧",
-			'Respondé con tu email, ej: "luis@pedidosya.com"',
+			'Escribí tu email *completo*, ej: "luis@pedidosya.com" — no abrevies, incluí el @dominio.',
 		);
 	}
 
@@ -1182,7 +1182,7 @@ async function processFallasGroupReport(phone: string, senderName: string): Prom
 		firstName ? `Hola ${firstName}, vi tu reporte en el grupo 👀` : "Vi tu reporte en el grupo de fallas 👀",
 		`Tipo de falla: *${failureType}*`,
 		lob ? `LOB: ${lob}` : "",
-		email ? `Correo: ${email}` : "⚠️ No identifiqué tu correo — respondé acá con tu email corporativo para poder gestionarlo.",
+		email ? `Correo: ${email}` : "⚠️ No identifiqué tu correo — respondé acá con tu email corporativo *completo*, ej: luis@pedidosya.com (no abrevies).",
 		`Formulario de desconexión: ${formNote}`,
 		email ? '¿Es correcto? Respondé "sí" para que te cambie a *Fuera de línea*.' : "",
 	].filter(Boolean).join("\n");
