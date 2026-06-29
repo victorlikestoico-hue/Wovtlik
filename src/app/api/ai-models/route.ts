@@ -23,7 +23,7 @@ const FALLBACK_MODELS: Record<Provider, Record<Capability, string[]>> = {
 	openai: {
 		chat: ["gpt-4o-mini", "gpt-4o"],
 		audio: ["whisper-large-v3", "whisper-large-v3-turbo", "gpt-4o-transcribe", "whisper-1"],
-		image: ["gpt-4o-mini", "gpt-4o"],
+		image: ["gpt-4o-mini", "gpt-4o", "meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"],
 	},
 	google: {
 		chat: ["gemini-3.5-flash", "gemini-2.5-flash"],
@@ -93,7 +93,12 @@ function filterModels(
 	}
 
 	return uniqueModels(
-		models.filter((model) => model.startsWith("gpt-") || model.includes("4o")),
+		models.filter(
+			(model) =>
+				model.startsWith("gpt-") ||
+				model.includes("4o") ||
+				model.includes("llama"),
+		),
 	);
 }
 
