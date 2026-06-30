@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Trash2, Plus, Send, FileText, Megaphone, Loader2 } from "lucide-react";
+import { Trash2, Plus, Send, FileText, Megaphone, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface Agent {
@@ -230,19 +230,37 @@ function FormBroadcastSection() {
 
 // ── Mass broadcast section ──────────────────────────────────────────────────
 
+interface MasterAgent {
+	id: number;
+	name: string;
+	phone: string;
+	tl: string;
+	sm: string;
+	eg: string;
+	wave: string;
+}
+
+type LobFilter = "all" | "tl" | "sm" | "eg";
+
 function MassBroadcastSection() {
-	const [agents, setAgents] = useState<Agent[]>([]);
+	const [agents, setAgents] = useState<MasterAgent[]>([]);
 	const [loading, setLoading] = useState(true);
+	const [syncing, setSyncing] = useState(false);
 	const [sectionError, setSectionError] = useState<string | null>(null);
+	const [syncMsg, setSyncMsg] = useState<string | null>(null);
 	const [message, setMessage] = useState("");
+	const [selected, setSelected] = useState<Set<string>>(new Set());
+	const [lobFilter, setLobFilter] = useState<LobFilter>("all");
 
 	const loadAgents = useCallback(async () => {
 		setLoading(true);
 		setSectionError(null);
 		try {
-			const res = await fetch("/api/broadcast/mass/agents");
+			const res = await fetch("/api/broadcast/agents-master");
 			if (!res.ok) throw new Error("No se pudieron cargar los agentes");
-			setAgents(await res.json());
+			const data: MasterAgent[] = await res.json();
+			setAgents(data);
+			setSelected(new Set(data.map((a) => a.phone)));
 		} catch (err: any) {
 			setSectionError(err.message);
 		} finally {
@@ -252,31 +270,66 @@ function MassBroadcastSection() {
 
 	useEffect(() => { void loadAgents(); }, [loadAgents]);
 
-	const handleDelete = async (id: number) => {
-		if (!confirm("¿Eliminar este agente de la lista de envíos masivos?")) return;
-		const res = await fetch(`/api/broadcast/mass/agents/${id}`, { method: "DELETE" });
-		if (res.ok) setAgents((prev) => prev.filter((a) => a.id !== id));
+	const filteredAgents = agents.filter((a) => {
+		if (lobFilter === "tl") return a.tl.trim() !== "";
+		if (lobFilter === "sm") return a.sm.trim() !== "";
+		if (lobFilter === "eg") return a.eg.trim() !== "";
+		return true;
+	});
+
+	const toggleAgent = (phone: string) => {
+		setSelected((prev) => {
+			const next = new Set(prev);
+			if (next.has(phone)) next.delete(phone);
+			else next.add(phone);
+			return next;
+		});
 	};
 
-	const handleAdd = async (name: string, phone: string) => {
-		const res = await fetch("/api/broadcast/mass/agents", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ name, phone }),
+	const selectAllVisible = () => {
+		setSelected((prev) => {
+			const next = new Set(prev);
+			filteredAgents.forEach((a) => next.add(a.phone));
+			return next;
 		});
-		if (!res.ok) {
-			const body = await res.json().catch(() => ({}));
-			throw new Error(body.error || "Error al agregar");
-		}
-		const agent = await res.json();
-		setAgents((prev) => [...prev, agent]);
 	};
+
+	const deselectAllVisible = () => {
+		setSelected((prev) => {
+			const next = new Set(prev);
+			filteredAgents.forEach((a) => next.delete(a.phone));
+			return next;
+		});
+	};
+
+	const handleSync = async () => {
+		setSyncing(true);
+		setSyncMsg(null);
+		setSectionError(null);
+		try {
+			const res = await fetch("/api/broadcast/agents-master", { method: "POST" });
+			const body = await res.json();
+			if (!res.ok) throw new Error(body.error || "Error al sincronizar");
+			const data: MasterAgent[] = body.agents ?? [];
+			setAgents(data);
+			setSelected(new Set(data.map((a) => a.phone)));
+			setSyncMsg(`✓ ${body.total} agentes actualizados desde Sheets`);
+		} catch (err: any) {
+			setSectionError(err.message);
+		} finally {
+			setSyncing(false);
+		}
+	};
+
+	const visibleSelected = filteredAgents.filter((a) => selected.has(a.phone));
+	const allVisibleSelected = filteredAgents.length > 0 && filteredAgents.every((a) => selected.has(a.phone));
 
 	const handleSend = async () => {
+		const selectedPhones = Array.from(selected);
 		const res = await fetch("/api/broadcast/mass", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ message }),
+			body: JSON.stringify({ message, selectedPhones }),
 		});
 		const body = await res.json();
 		if (!res.ok) throw new Error(body.error || "Error al enviar");
@@ -284,43 +337,148 @@ function MassBroadcastSection() {
 		return { count: (body.queued as string[]).length };
 	};
 
-	const estimatedMinutes = agents.length > 0 ? Math.ceil(agents.length * 60 / 60) : 0;
+	const lobLabels: { value: LobFilter; label: string }[] = [
+		{ value: "all", label: "Todos" },
+		{ value: "tl",  label: "TL"   },
+		{ value: "sm",  label: "SM"   },
+		{ value: "eg",  label: "EG"   },
+	];
 
 	return (
 		<div className="flex flex-col gap-4">
 			<p className="text-sm text-muted-foreground max-w-prose">
-				Envía un mensaje libre a todos los agentes de esta lista. Las conversaciones nuevas esperan <strong>1 minuto</strong> entre sí para evitar bloqueos de WhatsApp.
+				Envía un mensaje a los agentes seleccionados. Filtra por LOB y usa los controles de selección. Las conversaciones nuevas esperan <strong>1 minuto</strong> entre sí para evitar bloqueos de WhatsApp.
 			</p>
 
 			{sectionError && <p className="text-sm text-error">{sectionError}</p>}
 
+			{/* Mensaje */}
 			<div className="flex flex-col gap-2">
 				<label className="text-sm font-semibold text-on-surface">Mensaje</label>
 				<textarea
 					value={message}
 					onChange={(e) => setMessage(e.target.value)}
-					placeholder="Escribe aquí el mensaje para todos los agentes..."
+					placeholder="Escribe aquí el mensaje para los agentes seleccionados..."
 					rows={4}
 					className="rounded-xl border border-outline-variant/30 bg-surface-container-low px-3 py-2 text-sm text-on-surface outline-none focus:border-primary/50 resize-y"
 				/>
-				{agents.length > 0 && message.trim() && (
+				{selected.size > 0 && message.trim() && (
 					<p className="text-xs text-muted-foreground">
-						Se enviará a {agents.length} agente{agents.length !== 1 ? "s" : ""}. Tiempo estimado: ~{estimatedMinutes} min.
+						Se enviará a <strong>{selected.size}</strong> agente{selected.size !== 1 ? "s" : ""}.
 					</p>
 				)}
 				<SendButton
-					label="Enviar a todos"
+					label={`Enviar a ${selected.size} seleccionado${selected.size !== 1 ? "s" : ""}`}
 					onConfirm={handleSend}
-					confirmMessage={`¿Enviar este mensaje a los ${agents.length} agentes configurados?`}
+					confirmMessage={`¿Enviar este mensaje a ${selected.size} agente${selected.size !== 1 ? "s" : ""}?`}
 				/>
 			</div>
 
-			<div className="flex flex-col gap-2">
-				<h4 className="text-sm font-semibold text-on-surface">
-					Agentes ({agents.length})
-				</h4>
-				<AgentTable agents={agents} onDelete={handleDelete} loading={loading} />
-				<AddAgentForm onAdd={handleAdd} />
+			{/* Agentes */}
+			<div className="flex flex-col gap-3">
+				<div className="flex items-center justify-between gap-3 flex-wrap">
+					<h4 className="text-sm font-semibold text-on-surface">
+						Agentes ({agents.length})
+					</h4>
+					<button
+						type="button"
+						onClick={handleSync}
+						disabled={syncing}
+						className="flex items-center gap-1.5 rounded-lg border border-outline-variant/30 px-3 py-1.5 text-xs text-muted-foreground hover:text-on-surface hover:border-primary/50 transition-colors disabled:opacity-50"
+					>
+						{syncing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+						Sincronizar desde Sheets
+					</button>
+				</div>
+
+				{syncMsg && <p className="text-xs text-emerald-600 font-medium">{syncMsg}</p>}
+
+				{/* Filtro LOB */}
+				<div className="flex items-center gap-1.5 flex-wrap">
+					<span className="text-xs text-muted-foreground mr-1">LOB:</span>
+					{lobLabels.map(({ value, label }) => (
+						<button
+							key={value}
+							type="button"
+							onClick={() => setLobFilter(value)}
+							className={`rounded-full px-3 py-0.5 text-xs font-medium transition-colors ${
+								lobFilter === value
+									? "bg-primary text-primary-foreground"
+									: "bg-muted text-muted-foreground hover:bg-muted/80"
+							}`}
+						>
+							{label}
+						</button>
+					))}
+				</div>
+
+				{/* Controles de selección */}
+				<div className="flex items-center gap-2">
+					<button
+						type="button"
+						onClick={allVisibleSelected ? deselectAllVisible : selectAllVisible}
+						className="text-xs text-primary hover:underline"
+					>
+						{allVisibleSelected ? "Quitar todos" : "Seleccionar todos"}
+					</button>
+					<span className="text-xs text-muted-foreground">
+						· {visibleSelected.length} de {filteredAgents.length} visibles seleccionados
+					</span>
+				</div>
+
+				{/* Lista de agentes */}
+				{loading ? (
+					<div className="flex items-center justify-center py-8 text-muted-foreground">
+						<Loader2 className="size-4 animate-spin mr-2" />
+						<span className="text-sm">Cargando...</span>
+					</div>
+				) : filteredAgents.length === 0 ? (
+					<p className="py-4 text-center text-sm text-muted-foreground">
+						{agents.length === 0
+							? "Sin agentes. Haz clic en «Sincronizar desde Sheets»."
+							: "Sin agentes en este LOB."}
+					</p>
+				) : (
+					<div className="divide-y divide-border rounded-xl border border-outline-variant/30 overflow-hidden max-h-80 overflow-y-auto">
+						{filteredAgents.map((agent) => {
+							const isSelected = selected.has(agent.phone);
+							const lobTags = [
+								agent.tl ? `TL: ${agent.tl}` : null,
+								agent.sm ? `SM: ${agent.sm}` : null,
+								agent.eg ? `EG: ${agent.eg}` : null,
+								agent.wave ? `Wave ${agent.wave}` : null,
+							].filter(Boolean);
+							return (
+								<label
+									key={agent.id}
+									className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
+										isSelected ? "bg-primary/5 hover:bg-primary/10" : "bg-surface hover:bg-muted/40"
+									}`}
+								>
+									<input
+										type="checkbox"
+										checked={isSelected}
+										onChange={() => toggleAgent(agent.phone)}
+										className="size-4 rounded accent-primary"
+									/>
+									<div className="min-w-0 flex-1">
+										<span className="text-sm font-medium text-on-surface">{agent.name}</span>
+										<span className="ml-2 text-xs text-muted-foreground">+{agent.phone}</span>
+										{lobTags.length > 0 && (
+											<div className="flex flex-wrap gap-1 mt-0.5">
+												{lobTags.map((tag) => (
+													<span key={tag} className="rounded-full bg-muted px-2 py-0 text-[10px] text-muted-foreground">
+														{tag}
+													</span>
+												))}
+											</div>
+										)}
+									</div>
+								</label>
+							);
+						})}
+					</div>
+				)}
 			</div>
 		</div>
 	);

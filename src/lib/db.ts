@@ -519,6 +519,47 @@ export async function deleteBroadcastAgent(id: number): Promise<boolean> {
 	return (res.rowCount ?? 0) > 0;
 }
 
+export interface AgentMasterRow {
+	id: number;
+	name: string;
+	phone: string;
+	tl: string;
+	sm: string;
+	eg: string;
+	wave: string;
+	synced_at: Date;
+}
+
+export async function listAgentsMaster(): Promise<AgentMasterRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<AgentMasterRow>("SELECT * FROM agents_master ORDER BY name ASC");
+	return res.rows;
+}
+
+export async function syncAgentsMaster(
+	rows: Array<{ name: string; phone: string; tl: string; sm: string; eg: string; wave: string }>,
+): Promise<number> {
+	await ensureSchemaInitialized();
+	if (rows.length === 0) return 0;
+	let count = 0;
+	for (const r of rows) {
+		const res = await pool.query(
+			`INSERT INTO agents_master (name, phone, tl, sm, eg, wave, synced_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, NOW())
+			 ON CONFLICT (phone) DO UPDATE SET
+			   name = EXCLUDED.name,
+			   tl   = EXCLUDED.tl,
+			   sm   = EXCLUDED.sm,
+			   eg   = EXCLUDED.eg,
+			   wave = EXCLUDED.wave,
+			   synced_at = NOW()`,
+			[r.name, r.phone, r.tl, r.sm, r.eg, r.wave],
+		);
+		if ((res.rowCount ?? 0) > 0) count++;
+	}
+	return count;
+}
+
 // 19. markOutboxSent(id)
 export async function markOutboxSent(id: number): Promise<void> {
 	await ensureSchemaInitialized();
