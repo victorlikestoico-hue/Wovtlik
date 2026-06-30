@@ -25,7 +25,7 @@ async function fetchAgentsFromSheet() {
 	for (const { cells } of rows) {
 		const name  = (cells[nameCol]  ?? "").trim();
 		const phone = (cells[phoneCol] ?? "").replace(/\D/g, "");
-		if (!name || !phone) continue;
+		if (!name || phone.length < 10) continue;
 		agents.push({
 			name,
 			phone,
