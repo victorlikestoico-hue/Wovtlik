@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Trash2, Plus, Send, FileText, Megaphone, Loader2, RefreshCw } from "lucide-react";
+import { Trash2, Plus, Send, FileText, Megaphone, Loader2, RefreshCw, StopCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface Agent {
@@ -252,6 +252,11 @@ function MassBroadcastSection() {
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [lobFilter, setLobFilter] = useState<LobFilter>("all");
 	const [subFilter, setSubFilter] = useState<string | null>(null);
+	const [sending, setSending] = useState(false);
+	const [sendResult, setSendResult] = useState<{ count: number; batchId: string } | null>(null);
+	const [sendError, setSendError] = useState<string | null>(null);
+	const [cancelling, setCancelling] = useState(false);
+	const [cancelResult, setCancelResult] = useState<number | null>(null);
 
 	const loadAgents = useCallback(async () => {
 		setLoading(true);
@@ -362,16 +367,48 @@ function MassBroadcastSection() {
 	};
 
 	const handleSend = async () => {
-		const selectedPhones = Array.from(selected);
-		const res = await fetch("/api/broadcast/mass", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ message, selectedPhones }),
-		});
-		const body = await res.json();
-		if (!res.ok) throw new Error(body.error || "Error al enviar");
-		setMessage("");
-		return { count: (body.queued as string[]).length };
+		if (!message.trim() || selected.size === 0) return;
+		if (!confirm(`¿Enviar este mensaje a ${selected.size} agente${selected.size !== 1 ? "s" : ""}?`)) return;
+		setSending(true);
+		setSendResult(null);
+		setSendError(null);
+		setCancelResult(null);
+		try {
+			const res = await fetch("/api/broadcast/mass", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ message, selectedPhones: Array.from(selected) }),
+			});
+			const body = await res.json();
+			if (!res.ok) throw new Error(body.error || "Error al enviar");
+			setMessage("");
+			setSendResult({ count: (body.queued as string[]).length, batchId: body.batchId });
+		} catch (err: any) {
+			setSendError(err.message);
+		} finally {
+			setSending(false);
+		}
+	};
+
+	const handleCancel = async () => {
+		if (!sendResult?.batchId) return;
+		if (!confirm("¿Detener el envío? Se cancelarán los mensajes que aún no fueron enviados.")) return;
+		setCancelling(true);
+		try {
+			const res = await fetch("/api/broadcast/mass/cancel", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ batchId: sendResult.batchId }),
+			});
+			const body = await res.json();
+			if (!res.ok) throw new Error(body.error);
+			setCancelResult(body.cancelled as number);
+			setSendResult(null);
+		} catch (err: any) {
+			setSendError(err.message);
+		} finally {
+			setCancelling(false);
+		}
 	};
 
 	const lobLabels: { value: LobFilter; label: string }[] = [
@@ -398,17 +435,50 @@ function MassBroadcastSection() {
 					placeholder="Escribe aquí el mensaje para los agentes seleccionados..."
 					rows={4}
 					className="rounded-xl border border-outline-variant/30 bg-surface-container-low px-3 py-2 text-sm text-on-surface outline-none focus:border-primary/50 resize-y"
+					disabled={sending}
 				/>
-				{selected.size > 0 && message.trim() && (
+				{selected.size > 0 && message.trim() && !sendResult && (
 					<p className="text-xs text-muted-foreground">
 						Se enviará a <strong>{selected.size}</strong> agente{selected.size !== 1 ? "s" : ""}.
 					</p>
 				)}
-				<SendButton
-					label={`Enviar a ${selected.size} seleccionado${selected.size !== 1 ? "s" : ""}`}
-					onConfirm={handleSend}
-					confirmMessage={`¿Enviar este mensaje a ${selected.size} agente${selected.size !== 1 ? "s" : ""}?`}
-				/>
+
+				<div className="flex items-center gap-3 flex-wrap">
+					<Button
+						onClick={handleSend}
+						disabled={sending || !message.trim() || selected.size === 0}
+						size="sm"
+						className="gap-1.5"
+					>
+						{sending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+						{sending ? "Enviando..." : `Enviar a ${selected.size} seleccionado${selected.size !== 1 ? "s" : ""}`}
+					</Button>
+
+					{sendResult && (
+						<>
+							<span className="text-xs text-emerald-600 font-medium">
+								✓ {sendResult.count} mensaje{sendResult.count !== 1 ? "s" : ""} encolado{sendResult.count !== 1 ? "s" : ""}
+							</span>
+							<button
+								type="button"
+								onClick={handleCancel}
+								disabled={cancelling}
+								className="flex items-center gap-1 rounded-lg border border-error/40 px-3 py-1.5 text-xs font-medium text-error hover:bg-error/10 transition-colors disabled:opacity-50"
+							>
+								{cancelling ? <Loader2 className="size-3 animate-spin" /> : <StopCircle className="size-3" />}
+								{cancelling ? "Deteniendo..." : "Detener envío"}
+							</button>
+						</>
+					)}
+
+					{cancelResult !== null && (
+						<span className="text-xs text-amber-600 font-medium">
+							⏹ {cancelResult} mensaje{cancelResult !== 1 ? "s" : ""} cancelado{cancelResult !== 1 ? "s" : ""}
+						</span>
+					)}
+
+					{sendError && <span className="text-xs text-error">{sendError}</span>}
+				</div>
 			</div>
 
 			{/* Agentes */}

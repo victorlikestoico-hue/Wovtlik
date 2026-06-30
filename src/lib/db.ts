@@ -441,12 +441,13 @@ export async function enqueueOutbox(
 		media_url?: string | null;
 		metadata?: Record<string, unknown>;
 		send_after?: Date | null;
+		broadcast_batch_id?: string | null;
 	} = {},
 ): Promise<any> {
 	await ensureSchemaInitialized();
 	const res = await pool.query(
-		`INSERT INTO outbox (conversation_id, phone, content, media_type, media_url, metadata, send_after, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, NOW())
+		`INSERT INTO outbox (conversation_id, phone, content, media_type, media_url, metadata, send_after, broadcast_batch_id, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, NOW())
 		 RETURNING *`,
 		[
 			conversationId,
@@ -456,9 +457,19 @@ export async function enqueueOutbox(
 			options.media_url ?? null,
 			JSON.stringify(options.metadata ?? {}),
 			options.send_after ?? null,
+			options.broadcast_batch_id ?? null,
 		],
 	);
 	return res.rows[0];
+}
+
+export async function cancelBroadcastBatch(batchId: string): Promise<number> {
+	await ensureSchemaInitialized();
+	const res = await pool.query(
+		"DELETE FROM outbox WHERE broadcast_batch_id = $1 AND sent = 0",
+		[batchId],
+	);
+	return res.rowCount ?? 0;
 }
 
 // 18. getPendingOutbox(limit = 20)

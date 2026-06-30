@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { authErrorToResponse, requireRequestRole } from "@/lib/auth/session";
 import { runtimeSessionDeps as authDeps } from "@/lib/auth/runtime";
@@ -39,8 +40,9 @@ export async function POST(req: Request) {
 			return NextResponse.json({ error: "Ningún agente seleccionado." }, { status: 400 });
 		}
 
+		const batchId = randomUUID();
 		const queued: string[] = [];
-		let sendAfter = new Date(); // first message goes immediately (send_after = null below)
+		let sendAfter = new Date();
 		let firstMessage = true;
 
 		for (const agent of agents) {
@@ -53,17 +55,16 @@ export async function POST(req: Request) {
 				conversation.id,
 				agent.phone,
 				message,
-				{ send_after: firstMessage ? null : sendAfter },
+				{ send_after: firstMessage ? null : sendAfter, broadcast_batch_id: batchId },
 			);
 			queued.push(agent.phone);
 
-			// Accumulate delay for the next recipient
 			const delay = isNew ? NEW_CONV_DELAY_MS : EXISTING_DELAY_MS;
 			sendAfter = new Date(sendAfter.getTime() + delay);
 			firstMessage = false;
 		}
 
-		return NextResponse.json({ ok: true, queued });
+		return NextResponse.json({ ok: true, queued, batchId });
 	} catch (error: any) {
 		const authResponse = authErrorToResponse(error);
 		if (authResponse) return authResponse;
