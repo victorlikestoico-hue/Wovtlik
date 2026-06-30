@@ -251,6 +251,7 @@ function MassBroadcastSection() {
 	const [message, setMessage] = useState("");
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [lobFilter, setLobFilter] = useState<LobFilter>("all");
+	const [subFilter, setSubFilter] = useState<string | null>(null);
 
 	const loadAgents = useCallback(async () => {
 		setLoading(true);
@@ -270,12 +271,27 @@ function MassBroadcastSection() {
 
 	useEffect(() => { void loadAgents(); }, [loadAgents]);
 
-	const filteredAgents = agents.filter((a) => {
+	// Agentes del LOB activo (sin sub-filtro)
+	const lobAgents = agents.filter((a) => {
 		if (lobFilter === "tl") return a.tl.trim() !== "";
 		if (lobFilter === "sm") return a.sm.trim() !== "";
 		if (lobFilter === "eg") return a.eg.trim() !== "";
 		return true;
 	});
+
+	// Valores únicos del campo activo para el sub-filtro
+	const subValues = lobFilter !== "all"
+		? [...new Set(lobAgents.map((a) => a[lobFilter]).filter(Boolean))].sort()
+		: [];
+
+	// Agentes visibles tras aplicar sub-filtro
+	const filteredAgents = subFilter
+		? lobAgents.filter((a) => a[lobFilter as "tl" | "sm" | "eg"] === subFilter)
+		: lobAgents;
+
+	const selectGroup = (phones: string[]) => {
+		setSelected(new Set(phones));
+	};
 
 	const toggleAgent = (phone: string) => {
 		setSelected((prev) => {
@@ -286,20 +302,42 @@ function MassBroadcastSection() {
 		});
 	};
 
-	const selectAllVisible = () => {
-		setSelected((prev) => {
-			const next = new Set(prev);
-			filteredAgents.forEach((a) => next.add(a.phone));
-			return next;
-		});
+	const allVisibleSelected = filteredAgents.length > 0 && filteredAgents.every((a) => selected.has(a.phone));
+
+	const selectAllVisible = () => setSelected((prev) => {
+		const next = new Set(prev);
+		filteredAgents.forEach((a) => next.add(a.phone));
+		return next;
+	});
+
+	const deselectAllVisible = () => setSelected((prev) => {
+		const next = new Set(prev);
+		filteredAgents.forEach((a) => next.delete(a.phone));
+		return next;
+	});
+
+	// Clic en chip de LOB: filtra Y selecciona solo ese grupo con 1 clic
+	const handleLobClick = (value: LobFilter) => {
+		setLobFilter(value);
+		setSubFilter(null);
+		if (value === "all") {
+			setSelected(new Set(agents.map((a) => a.phone)));
+		} else {
+			const group = agents.filter((a) => a[value].trim() !== "");
+			selectGroup(group.map((a) => a.phone));
+		}
 	};
 
-	const deselectAllVisible = () => {
-		setSelected((prev) => {
-			const next = new Set(prev);
-			filteredAgents.forEach((a) => next.delete(a.phone));
-			return next;
-		});
+	// Clic en sub-filtro (nombre de TL/SM/EG): selecciona solo ese grupo
+	const handleSubClick = (val: string) => {
+		const next = val === subFilter ? null : val;
+		setSubFilter(next);
+		if (next && lobFilter !== "all") {
+			const group = lobAgents.filter((a) => a[lobFilter as "tl" | "sm" | "eg"] === next);
+			selectGroup(group.map((a) => a.phone));
+		} else {
+			selectGroup(lobAgents.map((a) => a.phone));
+		}
 	};
 
 	const handleSync = async () => {
@@ -313,6 +351,8 @@ function MassBroadcastSection() {
 			const data: MasterAgent[] = body.agents ?? [];
 			setAgents(data);
 			setSelected(new Set(data.map((a) => a.phone)));
+			setLobFilter("all");
+			setSubFilter(null);
 			setSyncMsg(`✓ ${body.total} agentes actualizados desde Sheets`);
 		} catch (err: any) {
 			setSectionError(err.message);
@@ -320,9 +360,6 @@ function MassBroadcastSection() {
 			setSyncing(false);
 		}
 	};
-
-	const visibleSelected = filteredAgents.filter((a) => selected.has(a.phone));
-	const allVisibleSelected = filteredAgents.length > 0 && filteredAgents.every((a) => selected.has(a.phone));
 
 	const handleSend = async () => {
 		const selectedPhones = Array.from(selected);
@@ -347,7 +384,7 @@ function MassBroadcastSection() {
 	return (
 		<div className="flex flex-col gap-4">
 			<p className="text-sm text-muted-foreground max-w-prose">
-				Envía un mensaje a los agentes seleccionados. Filtra por LOB y usa los controles de selección. Las conversaciones nuevas esperan <strong>1 minuto</strong> entre sí para evitar bloqueos de WhatsApp.
+				Envía un mensaje a los agentes seleccionados. Clic en un LOB selecciona ese grupo completo. Las conversaciones nuevas esperan <strong>1 minuto</strong> entre sí para evitar bloqueos de WhatsApp.
 			</p>
 
 			{sectionError && <p className="text-sm text-error">{sectionError}</p>}
@@ -393,26 +430,49 @@ function MassBroadcastSection() {
 
 				{syncMsg && <p className="text-xs text-emerald-600 font-medium">{syncMsg}</p>}
 
-				{/* Filtro LOB */}
-				<div className="flex items-center gap-1.5 flex-wrap">
-					<span className="text-xs text-muted-foreground mr-1">LOB:</span>
-					{lobLabels.map(({ value, label }) => (
-						<button
-							key={value}
-							type="button"
-							onClick={() => setLobFilter(value)}
-							className={`rounded-full px-3 py-0.5 text-xs font-medium transition-colors ${
-								lobFilter === value
-									? "bg-primary text-primary-foreground"
-									: "bg-muted text-muted-foreground hover:bg-muted/80"
-							}`}
-						>
-							{label}
-						</button>
-					))}
+				{/* Filtro LOB — 1 clic filtra y selecciona ese grupo */}
+				<div className="flex flex-col gap-1.5">
+					<div className="flex items-center gap-1.5 flex-wrap">
+						<span className="text-xs text-muted-foreground mr-1">LOB:</span>
+						{lobLabels.map(({ value, label }) => (
+							<button
+								key={value}
+								type="button"
+								onClick={() => handleLobClick(value)}
+								className={`rounded-full px-3 py-0.5 text-xs font-medium transition-colors ${
+									lobFilter === value
+										? "bg-primary text-primary-foreground"
+										: "bg-muted text-muted-foreground hover:bg-muted/80"
+								}`}
+							>
+								{label}
+							</button>
+						))}
+					</div>
+
+					{/* Sub-filtro por nombre de TL/SM/EG — 1 clic selecciona solo ese grupo */}
+					{subValues.length > 0 && (
+						<div className="flex items-center gap-1.5 flex-wrap pl-1">
+							<span className="text-xs text-muted-foreground mr-1">↳</span>
+							{subValues.map((val) => (
+								<button
+									key={val}
+									type="button"
+									onClick={() => handleSubClick(val)}
+									className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+										subFilter === val
+											? "bg-secondary text-secondary-foreground"
+											: "bg-muted/60 text-muted-foreground hover:bg-muted"
+									}`}
+								>
+									{val}
+								</button>
+							))}
+						</div>
+					)}
 				</div>
 
-				{/* Controles de selección */}
+				{/* Controles de selección manual */}
 				<div className="flex items-center gap-2">
 					<button
 						type="button"
@@ -422,7 +482,7 @@ function MassBroadcastSection() {
 						{allVisibleSelected ? "Quitar todos" : "Seleccionar todos"}
 					</button>
 					<span className="text-xs text-muted-foreground">
-						· {visibleSelected.length} de {filteredAgents.length} visibles seleccionados
+						· {filteredAgents.filter((a) => selected.has(a.phone)).length} de {filteredAgents.length} visibles · <strong>{selected.size}</strong> total seleccionados
 					</span>
 				</div>
 
@@ -436,7 +496,7 @@ function MassBroadcastSection() {
 					<p className="py-4 text-center text-sm text-muted-foreground">
 						{agents.length === 0
 							? "Sin agentes. Haz clic en «Sincronizar desde Sheets»."
-							: "Sin agentes en este LOB."}
+							: "Sin agentes en este grupo."}
 					</p>
 				) : (
 					<div className="divide-y divide-border rounded-xl border border-outline-variant/30 overflow-hidden max-h-80 overflow-y-auto">
