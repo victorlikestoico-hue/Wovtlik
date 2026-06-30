@@ -252,6 +252,7 @@ function MassBroadcastSection() {
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [lobFilter, setLobFilter] = useState<LobFilter>("all");
 	const [subFilter, setSubFilter] = useState<string | null>(null);
+	const [delaySecs, setDelaySecs] = useState(60);
 	const [sending, setSending] = useState(false);
 	const [sendResult, setSendResult] = useState<{ count: number; batchId: string } | null>(null);
 	const [sendError, setSendError] = useState<string | null>(null);
@@ -377,7 +378,7 @@ function MassBroadcastSection() {
 			const res = await fetch("/api/broadcast/mass", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ message, selectedPhones: Array.from(selected) }),
+				body: JSON.stringify({ message, selectedPhones: Array.from(selected), delaySecs }),
 			});
 			const body = await res.json();
 			if (!res.ok) throw new Error(body.error || "Error al enviar");
@@ -421,7 +422,7 @@ function MassBroadcastSection() {
 	return (
 		<div className="flex flex-col gap-4">
 			<p className="text-sm text-muted-foreground max-w-prose">
-				Envía un mensaje a los agentes seleccionados. Clic en un LOB selecciona ese grupo completo. Las conversaciones nuevas esperan <strong>1 minuto</strong> entre sí para evitar bloqueos de WhatsApp.
+				Envía un mensaje a los agentes seleccionados. Clic en un LOB selecciona ese grupo completo. Configurá el tiempo de espera entre mensajes para evitar bloqueos de WhatsApp (mínimo 15 s).
 			</p>
 
 			{sectionError && <p className="text-sm text-error">{sectionError}</p>}
@@ -437,9 +438,29 @@ function MassBroadcastSection() {
 					className="rounded-xl border border-outline-variant/30 bg-surface-container-low px-3 py-2 text-sm text-on-surface outline-none focus:border-primary/50 resize-y"
 					disabled={sending}
 				/>
+				{/* Delay configurable */}
+				<div className="flex items-center gap-2">
+					<label className="text-xs text-muted-foreground whitespace-nowrap">Espera entre mensajes:</label>
+					<input
+						type="number"
+						min={15}
+						max={600}
+						value={delaySecs}
+						onChange={(e) => setDelaySecs(Math.max(15, Math.min(600, Number(e.target.value) || 60)))}
+						className="w-20 rounded-lg border border-outline-variant/30 bg-surface-container-low px-2 py-1 text-xs text-on-surface outline-none focus:border-primary/50 text-center"
+						disabled={sending}
+					/>
+					<span className="text-xs text-muted-foreground">segundos</span>
+					{selected.size > 1 && (
+						<span className="text-xs text-muted-foreground">
+							· Duración estimada: ~{Math.ceil((selected.size - 1) * delaySecs / 60)} min
+						</span>
+					)}
+				</div>
+
 				{selected.size > 0 && message.trim() && !sendResult && (
 					<p className="text-xs text-muted-foreground">
-						Se enviará a <strong>{selected.size}</strong> agente{selected.size !== 1 ? "s" : ""}.
+						Se enviará a <strong>{selected.size}</strong> agente{selected.size !== 1 ? "s" : ""}. Siempre usa el delay configurado entre mensajes.
 					</p>
 				)}
 
