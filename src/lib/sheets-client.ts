@@ -119,6 +119,20 @@ async function readSheetRaw(spreadsheetId: string): Promise<RawSheet> {
 	return readNamedSheetRaw(spreadsheetId, SHEET_NAME);
 }
 
+/** Lee una hoja por su GID (sheetId numérico) resolviendo primero el nombre via metadata. */
+export async function readSheetByGid(spreadsheetId: string, gid: string): Promise<RawSheet> {
+	const token = await getAccessToken();
+	const metaRes = await fetch(
+		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties`,
+		{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
+	);
+	if (!metaRes.ok) throw new Error(`[sheets] Metadata error ${metaRes.status}: ${(await metaRes.text()).substring(0, 200)}`);
+	const meta = await metaRes.json() as { sheets: Array<{ properties: { sheetId: number; title: string } }> };
+	const sheet = meta.sheets.find((s) => String(s.properties.sheetId) === gid);
+	if (!sheet) throw new Error(`[sheets] No se encontró una hoja con GID ${gid}`);
+	return readNamedSheetRaw(spreadsheetId, sheet.properties.title);
+}
+
 // ─── Sheet write ──────────────────────────────────────────────────────────────
 
 async function updateCell(
