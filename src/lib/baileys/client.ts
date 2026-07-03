@@ -310,6 +310,19 @@ function findEmbeddedPartialEmailToken(text: string): string | null {
 	return null;
 }
 
+// Todos los correos corporativos de PedidosYa llevan este sufijo antes del dominio
+// (ej. "victor.garces_ndo.ext@pedidosya.com"), pero los agentes casi nunca lo incluyen
+// al abreviar su correo como "victor.garces". Hay que completarlo para que la desconexión
+// llegue con el correo real, no uno inexistente.
+const CORPORATE_EMAIL_SUFFIX = "_ndo.ext";
+const CORPORATE_EMAIL_DOMAIN = "@pedidosya.com";
+
+/** "victor.garces" → "victor.garces_ndo.ext@pedidosya.com" (no duplica el sufijo si ya viene incluido). */
+function buildFullCorporateEmail(localPart: string): string {
+	const hasSuffix = localPart.toLowerCase().endsWith(CORPORATE_EMAIL_SUFFIX);
+	return `${localPart}${hasSuffix ? "" : CORPORATE_EMAIL_SUFFIX}${CORPORATE_EMAIL_DOMAIN}`;
+}
+
 const fallasGroupDebounceKey = (phone: string) => `bot:fallas_group_debounce:${phone}`;
 const fallasGroupTimers = new Map<string, NodeJS.Timeout>();
 // Última key de mensaje recibida por agente en el grupo de fallas, para poder reaccionarle
@@ -1187,7 +1200,7 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 
 /** Detecta un mensaje del grupo de fallas y programa su procesamiento agregado por agente. */
 async function handleFallasGroupMessage(msg: any): Promise<void> {
-	const text = extractGroupMessageText(msg).trim();
+	let text = extractGroupMessageText(msg).trim();
 	if (!text) return;
 
 	const phone = resolveFallasGroupSenderPhone(msg);
@@ -1230,20 +1243,24 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	}
 
 	// Mandaron el correo sin @dominio — el mensaje entero o embebido en una frase más larga
-	// (ej. "correo: victor.garces, se cayó el internet") → recordarles que va completo.
+	// (ej. "correo: victor.garces, se cayó el internet"). Se completa con el sufijo real
+	// de los correos de la empresa (ej. "victor.garces_ndo.ext@pedidosya.com") y se sigue
+	// procesando con ese correo armado — no hace falta que el agente vuelva a escribir nada
+	// para que la desconexión se registre en el sheet. Igual se le avisa que la próxima vez
+	// lo mande completo.
 	const embeddedPartialEmail = !EMAIL_REGEX.test(text) ? findEmbeddedPartialEmailToken(text) : null;
 	if (embeddedPartialEmail) {
+		const fullEmail = buildFullCorporateEmail(embeddedPartialEmail);
+		text = text.replace(embeddedPartialEmail, fullEmail);
 		if (globalSock && isSocketConnected) {
 			try {
 				await globalSock.sendMessage(msg.key.remoteJid as string, {
-					text: `Recordá enviar el correo *completo*, con @ y dominio (ej: "${embeddedPartialEmail}@pedidosya.com"), no la abreviación.`,
+					text: `Anoté tu correo como *${fullEmail}*. La próxima vez mandalo *completo*, con @ y dominio, para no tener que completarlo.`,
 				});
 			} catch (err) {
 				console.error("[fallas-group] Error respondiendo recordatorio de correo completo:", err);
 			}
 		}
-		// Si el mensaje era solo esa abreviación, no queda nada más que procesar.
-		if (embeddedPartialEmail === text.trim()) return;
 	}
 
 	if (isResolvedReportMessage(text)) {
