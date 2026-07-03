@@ -291,6 +291,25 @@ function matchesPartialEmail(text: string): boolean {
 	return PARTIAL_EMAIL_REGEX.test(text.trim()) && !EMAIL_REGEX.test(text);
 }
 
+// Extensiones de archivo comunes que looks como "nombre.apellido" pero no son un correo
+// abreviado (ej. "formulario.pdf", "captura.jpg") — se excluyen para evitar falsos positivos.
+const PARTIAL_EMAIL_FALSE_POSITIVE_EXT = /\.(com|net|org|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|mp4|zip|rar|txt|csv)$/i;
+
+/**
+ * Busca un token tipo "nombre.apellido" (correo sin @dominio) dentro de un mensaje más largo,
+ * no solo cuando el mensaje entero es la abreviación. Los agentes casi siempre lo escriben
+ * mezclado con el resto del reporte (ej. "correo: victor.garces, se cayó el internet").
+ */
+function findEmbeddedPartialEmailToken(text: string): string | null {
+	const tokens = text.split(/\s+/);
+	for (const rawToken of tokens) {
+		const token = rawToken.replace(/^[^\wáéíóúñ]+|[^\wáéíóúñ]+$/gi, "");
+		if (!token || PARTIAL_EMAIL_FALSE_POSITIVE_EXT.test(token)) continue;
+		if (matchesPartialEmail(token)) return token;
+	}
+	return null;
+}
+
 const fallasGroupDebounceKey = (phone: string) => `bot:fallas_group_debounce:${phone}`;
 const fallasGroupTimers = new Map<string, NodeJS.Timeout>();
 // Última key de mensaje recibida por agente en el grupo de fallas, para poder reaccionarle
@@ -1210,18 +1229,21 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 		return;
 	}
 
-	// Mandaron solo "nombre.apellido" (sin @dominio) → recordarles que el correo va completo.
-	if (matchesPartialEmail(text)) {
+	// Mandaron el correo sin @dominio — el mensaje entero o embebido en una frase más larga
+	// (ej. "correo: victor.garces, se cayó el internet") → recordarles que va completo.
+	const embeddedPartialEmail = !EMAIL_REGEX.test(text) ? findEmbeddedPartialEmailToken(text) : null;
+	if (embeddedPartialEmail) {
 		if (globalSock && isSocketConnected) {
 			try {
 				await globalSock.sendMessage(msg.key.remoteJid as string, {
-					text: `Recordá enviar el correo *completo*, con @ y dominio (ej: "${text.trim()}@pedidosya.com"), no la abreviación.`,
+					text: `Recordá enviar el correo *completo*, con @ y dominio (ej: "${embeddedPartialEmail}@pedidosya.com"), no la abreviación.`,
 				});
 			} catch (err) {
 				console.error("[fallas-group] Error respondiendo recordatorio de correo completo:", err);
 			}
 		}
-		return;
+		// Si el mensaje era solo esa abreviación, no queda nada más que procesar.
+		if (embeddedPartialEmail === text.trim()) return;
 	}
 
 	if (isResolvedReportMessage(text)) {
