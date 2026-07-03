@@ -280,6 +280,17 @@ function matchesTlTurnoQuery(lower: string): boolean {
 	return TL_TURNO_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
+// Local-part de un email (ej. "maria.tellez" o "victor.garces_ndo.ext") mandado solo, sin
+// "@dominio". Los agentes suelen abreviar así al reportar una falla; hay que pedirles el
+// correo completo. Los correos de la empresa pueden llevar guión bajo y sufijos (ej. "_ext"),
+// por eso el charset es el mismo que el local-part de EMAIL_REGEX, exigiendo al menos un punto.
+const PARTIAL_EMAIL_REGEX = /^[\wáéíóúñ+%-]+(\.[\wáéíóúñ+%-]+)+$/i;
+
+/** true si el texto es solo un "nombre.apellido" sin @dominio (abreviación de correo). */
+function matchesPartialEmail(text: string): boolean {
+	return PARTIAL_EMAIL_REGEX.test(text.trim()) && !EMAIL_REGEX.test(text);
+}
+
 const fallasGroupDebounceKey = (phone: string) => `bot:fallas_group_debounce:${phone}`;
 const fallasGroupTimers = new Map<string, NodeJS.Timeout>();
 // Última key de mensaje recibida por agente en el grupo de fallas, para poder reaccionarle
@@ -1194,6 +1205,20 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 				await globalSock.sendMessage(msg.key.remoteJid as string, { text: replyText });
 			} catch (err) {
 				console.error("[fallas-group] Error respondiendo consulta de TL en turno:", err);
+			}
+		}
+		return;
+	}
+
+	// Mandaron solo "nombre.apellido" (sin @dominio) → recordarles que el correo va completo.
+	if (matchesPartialEmail(text)) {
+		if (globalSock && isSocketConnected) {
+			try {
+				await globalSock.sendMessage(msg.key.remoteJid as string, {
+					text: `Recordá enviar el correo *completo*, con @ y dominio (ej: "${text.trim()}@pedidosya.com"), no la abreviación.`,
+				});
+			} catch (err) {
+				console.error("[fallas-group] Error respondiendo recordatorio de correo completo:", err);
 			}
 		}
 		return;
