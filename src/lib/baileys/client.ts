@@ -331,7 +331,13 @@ const fallasGroupTimers = new Map<string, NodeJS.Timeout>();
 const fallasGroupLastMsgKey = new Map<string, any>();
 
 function extractGroupMessageText(msg: any): string {
-	return msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
+	return (
+		msg.message?.conversation ||
+		msg.message?.extendedTextMessage?.text ||
+		msg.message?.imageMessage?.caption ||
+		msg.message?.videoMessage?.caption ||
+		""
+	);
 }
 
 /** Intenta extraer el LOB del texto libre de un reporte del grupo. */
