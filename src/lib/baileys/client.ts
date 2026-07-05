@@ -1235,11 +1235,13 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 					else if (profileLob && GO_PO_LOBS.includes(profileLob)) detectedGroup = "go_po";
 				}
 
+				// Sin LOB detectado (ni en el texto ni en el perfil), no hay a qué link mandarlo —
+				// se le pregunta directamente en vez de asumir un LOB por defecto.
 				const replyText = detectedGroup === "cs_sm"
 					? "Entrá acá 👇\nhttps://docs.google.com/spreadsheets/d/e/2PACX-1vSMBOfczLNvjS3nncoU6rGU_GWKbKo4hgzUqRFw6Fqql9IUP4rvenlfQLw7cWXT6EedJL1FEwTLAk0N/pubhtml?gid=176485234&single=true"
 					: detectedGroup === "go_po"
 					? "Entrá acá 👇\nhttps://docs.google.com/spreadsheets/d/e/2PACX-1vSMBOfczLNvjS3nncoU6rGU_GWKbKo4hgzUqRFw6Fqql9IUP4rvenlfQLw7cWXT6EedJL1FEwTLAk0N/pubhtml?gid=276469694&single=true"
-					: "Entrá acá 👇\nhttps://script.google.com/a/macros/pedidosya.com/s/AKfycby0mvlKtQACyQyd7-tTWIUN-jAWV-L95ei0rhMCzyPzCRPzwWN3NWyGCtsa2fd4oRO6/exec\n\nBuscá la pestaña 📋 *TL Activo*";
+					: "¿TL de qué LOB necesitás? 🤔";
 				await globalSock.sendMessage(msg.key.remoteJid as string, { text: replyText });
 			} catch (err) {
 				console.error("[fallas-group] Error respondiendo consulta de TL en turno:", err);

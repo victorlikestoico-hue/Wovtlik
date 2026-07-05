@@ -12,7 +12,7 @@ const FALLAS_TEMPLATE_COOLDOWN_SECONDS = 60 * 60;
 const FALLAS_TEMPLATE_MESSAGE = [
 	"📋 *Cómo reportar una falla en este grupo:*",
 	"",
-	"1️⃣ *Correo completo* → nombre.apellido@pedidosya.com",
+	"1️⃣ *Correo completo* → nombre.apellido_ndo.ext@pedidosya.com (ej: victor.garces_ndo.ext@pedidosya.com)",
 	'2️⃣ *Motivo* → "se fue la luz", "cayó el internet", "HC no carga"',
 	"3️⃣ *LOB* al que pertenecés",
 	"4️⃣ Si ya llenaste el *formulario de desconexión*",

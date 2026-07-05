@@ -1,9 +1,9 @@
 import "./env-loader.ts";
 import { Redis } from "ioredis";
 import { getSettings } from "../src/lib/db.ts";
-import { getHorasCubrir, isHoraCubrirHHEE, type HoraCubrirEntry } from "../src/lib/sheets-client.ts";
+import { getHorasCubrir, isHoraCubrirHHEE, normalizeFecha, type HoraCubrirEntry } from "../src/lib/sheets-client.ts";
 import { generateCreativeText } from "../src/lib/ai-providers.ts";
-import { isWithinColombiaSendWindow, msUntilNextTopOfHour } from "../src/lib/colombia-schedule.ts";
+import { isWithinColombiaSendWindow, msUntilNextTopOfHour, currentDateColombiaISO } from "../src/lib/colombia-schedule.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
@@ -32,6 +32,12 @@ function sumHours(slots: HoraCubrirEntry[]): number {
 }
 
 function buildPrompt(entries: HoraCubrirEntry[]): string {
+	const today = currentDateColombiaISO();
+	const fmtSlot = (s: HoraCubrirEntry) => {
+		const isToday = normalizeFecha(s.fecha) === today;
+		return `${s.fecha} ${s.horario}${isToday ? " (HOY)" : ""}`;
+	};
+
 	const byLob = new Map<string, { hhee: HoraCubrirEntry[]; normal: HoraCubrirEntry[] }>();
 	for (const e of entries) {
 		const lob = e.lob || "Sin LOB especificado";
@@ -44,21 +50,24 @@ function buildPrompt(entries: HoraCubrirEntry[]): string {
 		.map(([lob, { hhee, normal }]) => {
 			const partes: string[] = [];
 			if (hhee.length) {
-				partes.push(`${sumHours(hhee)}h HHEE (pagan plus) — ${hhee.map((s) => `${s.fecha} ${s.horario}`).join(", ")}`);
+				partes.push(`${sumHours(hhee)}h HHEE (pagan plus) — ${hhee.map(fmtSlot).join(", ")}`);
 			}
 			if (normal.length) {
-				partes.push(`${sumHours(normal)}h normales, NO son HHEE — ${normal.map((s) => `${s.fecha} ${s.horario}`).join(", ")}`);
+				partes.push(`${sumHours(normal)}h normales, NO son HHEE — ${normal.map(fmtSlot).join(", ")}`);
 			}
 			return `- ${lob}: ${partes.join(" | ")}`;
 		})
 		.join("\n");
 
 	return [
-		"Sos el asistente que anuncia horas disponibles para cubrir, en un grupo de WhatsApp de agentes de Customer Success.",
-		"A continuación tenés, por LOB, las horas sin cubrir ya separadas en dos grupos: HHEE (pagan un plus) y normales (NO pagan extra).",
+		"Sos el asistente que anuncia horas disponibles para cubrir, en un grupo de WhatsApp de agentes de Customer Success que trabajan 100% desde casa (home office).",
+		`Hoy es ${today} (hora Colombia). A continuación tenés, por LOB, las horas sin cubrir ya separadas en dos grupos: HHEE (pagan un plus) y normales (NO pagan extra). Los turnos marcados con "(HOY)" son del día de hoy.`,
 		"CRÍTICO: nunca sumes, mezcles ni generalices las horas HHEE con las normales de un mismo LOB ni de LOBs distintos — son conceptos de pago distintos y deben quedar diferenciados en el mensaje.",
 		"No recalcules los totales de horas: usá tal cual los números que te paso, no los reinterpretes ni los redondees.",
+		"CRÍTICO: mostrá TODAS las horas de la lista (de hoy y de otros días), pero priorizá y resaltá primero, con más énfasis, las que son de HOY (son las más urgentes de cubrir). Las de otros días van después, en un tono más secundario.",
 		"Con esa información, escribí UN solo mensaje para WhatsApp, creativo, ingenioso y breve, con emojis, que motive a los agentes a anotarse.",
+		"El tono tiene que sonar MUY colombiano: usá expresiones, calidez y jerga típica de Colombia (ej. \"parcero\", \"qué chimba\", \"listo pues\", \"de una\", \"bacano\", \"a la orden\"), sin exagerar ni sonar forzado.",
+		"Vendé el plan aprovechando que son agentes de home office: destacá que pueden cubrir estas horas sin salir de la casa, en pijama, sin transporte ni tráfico, ganando plata extra desde su propio puesto.",
 		"Nombrá explícitamente TODOS los LOBs de la lista, indicando para cada uno cuántas horas HHEE y cuántas normales hay (omití el grupo que esté vacío en ese LOB). Dejá claro que las HHEE pagan más que las normales.",
 		"CRÍTICO: el mensaje SIEMPRE tiene que indicar que estas horas están disponibles para anotarse en el aplicativo de cambios de turno, en la sección *Horas Disponibles*. No omitas esto en ningún mensaje.",
 		"No inventes datos que no estén en la lista.",
