@@ -330,6 +330,64 @@ export async function clearAgentAbsence(
 	return { success: true, fecha: target.fecha, horario: target.horario };
 }
 
+const ABSENCE_REMOVAL_LOG_TAB = "eliminacion de ausencia";
+const ABSENCE_REMOVAL_LOG_HEADERS = ["timestamp", "email", "fecha", "horario", "motivo"];
+
+/**
+ * Registra en la planilla del Monitor (la misma de offline_queue_sheet_id, tab "pending_offline")
+ * quién, qué día y por qué se le eliminó una ausencia — casi siempre porque se conectó tarde,
+ * no por un error real de la programación. La pestaña "eliminacion de ausencia" debe existir
+ * de antemano ahí; esta función solo escribe el encabezado si está vacía (igual que queueAgentOffline).
+ */
+export async function logAbsenceRemoval(
+	spreadsheetId: string,
+	email:         string,
+	fecha:         string,
+	horario:       string,
+	motivo:        string,
+): Promise<void> {
+	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return;
+	try {
+		const token = await getAccessToken();
+
+		const checkRange = encodeURIComponent(`'${ABSENCE_REMOVAL_LOG_TAB}'!A1:E1`);
+		const checkRes = await fetch(
+			`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${checkRange}`,
+			{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
+		);
+		if (checkRes.ok) {
+			const checkData = await checkRes.json() as { values?: string[][] };
+			if (!checkData.values?.length) {
+				await fetch(
+					`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${checkRange}?valueInputOption=RAW`,
+					{
+						method:  "PUT",
+						headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+						body:    JSON.stringify({ values: [ABSENCE_REMOVAL_LOG_HEADERS] }),
+						signal:  AbortSignal.timeout(10_000),
+					},
+				);
+			}
+		}
+
+		const appendRange = encodeURIComponent(`'${ABSENCE_REMOVAL_LOG_TAB}'!A:E`);
+		const res = await fetch(
+			`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+			{
+				method:  "POST",
+				headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+				body:    JSON.stringify({ values: [[new Date().toISOString(), email, fecha, horario, motivo]] }),
+				signal:  AbortSignal.timeout(10_000),
+			},
+		);
+		if (!res.ok) {
+			console.error(`[sheets] logAbsenceRemoval error ${res.status}:`, await res.text());
+		}
+	} catch (err) {
+		console.error("[sheets] Error registrando la eliminación de ausencia:", err);
+	}
+}
+
 const OFFLINE_QUEUE_TAB = "pending_offline";
 const OFFLINE_QUEUE_HEADERS = ["timestamp", "email", "reason", "status", "result"];
 

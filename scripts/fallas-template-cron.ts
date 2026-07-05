@@ -18,6 +18,8 @@ const FALLAS_TEMPLATE_MESSAGE = [
 	"4️⃣ Si ya llenaste el *formulario de desconexión*",
 	"",
 	"_Aplica si no podés retomar tus chats por falla de energía, internet o HC._",
+	"",
+	"📌 *¿Te conectaste tarde y te quedó una ausencia?* Contalo acá mismo con tu correo completo y el motivo (ej: \"llegué tarde, se me pasó la hora\") y te la corrijo.",
 ].join("\n");
 
 // Reintento corto cuando el socket todavía no terminó de autenticarse (recién arrancado el proceso).

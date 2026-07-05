@@ -57,7 +57,7 @@ import {
 	markLatestGroupFailureReportResolved,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
-import { getAgentSchedule, clearAgentAbsence, queueAgentOffline, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
+import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
 import { createCalendarEvent } from "../google-calendar-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
@@ -330,6 +330,13 @@ const fallasGroupTimers = new Map<string, NodeJS.Timeout>();
 // solo se usa dentro de la ventana de debounce activa.
 const fallasGroupLastMsgKey = new Map<string, any>();
 
+// Mismo mecanismo de acumulación que el reporte de fallas, pero para "me conecté tarde" /
+// corrección de ausencia — track separado porque termina en una acción distinta (clearAgentAbsence
+// en vez de queueAgentOffline) y no debe mezclarse con reportes de conectividad.
+const absenceGroupDebounceKey = (phone: string) => `bot:fallas_group_absence_debounce:${phone}`;
+const absenceGroupTimers = new Map<string, NodeJS.Timeout>();
+const absenceGroupLastMsgKey = new Map<string, any>();
+
 function extractGroupMessageText(msg: any): string {
 	return (
 		msg.message?.conversation ||
@@ -389,11 +396,14 @@ function isResolvedReportMessage(text: string): boolean {
 // Pending intent system: when any handler finds no profile it saves the intent
 // type so that tryRegisterEmailReply can chain back to the right flow.
 type PendingIntent =
-	| "absence" | "absence_date" | "offline" | "offline_reason" | "schedule" | "metrics" | "horas_lob"
+	| "absence" | "absence_date" | "absence_reason" | "offline" | "offline_reason" | "schedule" | "metrics" | "horas_lob"
 	| "appointment" | "appointment_role" | "appointment_phone" | "appointment_date" | "appointment_time" | "appointment_name";
 const pendingIntentKey = (phone: string) => `bot:pending_intent:${phone}`;
 const PENDING_INTENT_TTL = 300; // 5 minutes
 const horasLobListKey = (phone: string) => `bot:horas_lob_list:${phone}`;
+// Guarda la fecha ya resuelta de la ausencia a eliminar mientras se le pide el motivo al agente
+// (por qué se conectó tarde) — separado del pendingIntentKey porque este último solo guarda un tag.
+const pendingAbsenceDateKey = (phone: string) => `bot:pending_absence_date:${phone}`;
 
 // Acumula los datos parciales de una cita en construcción durante el flujo multi-turno.
 // "role" distingue si quien escribe es un agente (agenda para un tercero) o un cliente
@@ -408,10 +418,6 @@ interface AppointmentPartial {
 }
 const pendingAppointmentDataKey = (phone: string) => `bot:pending_appointment:${phone}`;
 
-// Legacy alias kept for the absence date follow-up check (multi-turn)
-const absencePendingKey = (phone: string) => pendingIntentKey(phone);
-const ABSENCE_PENDING_TTL = PENDING_INTENT_TTL;
-
 // Detects absence-removal intent even when phrased with gerunds or natural language
 // e.g. "me ayudas eliminando una ausencia", "ayuda eliminando mi ausente"
 function matchesAbsenceIntent(msgLower: string): boolean {
@@ -419,6 +425,23 @@ function matchesAbsenceIntent(msgLower: string): boolean {
 	const hasAbsenceNoun = /\b(ausenci[ao]|ausente|faltas?)\b/.test(msgLower);
 	const hasRemovalVerb = /\b(elimin[a-záéíóúñü]{0,6}|quit[a-záéíóúñü]{0,6}|borr[a-záéíóúñü]{0,6}|sac[a-záéíóúñü]{0,6}|remov[a-záéíóúñü]{0,6})\b/.test(msgLower);
 	return hasAbsenceNoun && hasRemovalVerb;
+}
+
+// Frases de "me conecté tarde" en el grupo de fallas — el agente casi nunca dice "ausencia" o
+// "eliminar", solo cuenta que llegó tarde. Se combina con matchesAbsenceIntent para cubrir
+// también a quien sí pide la corrección explícitamente ("quitar mi ausente", etc.).
+const LATE_CONNECTION_KEYWORDS = [
+	"llegué tarde", "llegue tarde", "llegó tarde", "llego tarde",
+	"me conecté tarde", "me conecte tarde", "me conecto tarde",
+	"se conectó tarde", "se conecto tarde",
+	"entré tarde", "entre tarde", "entró tarde", "entro tarde",
+	"me atrasé", "me atrase", "me atrasó", "me atraso",
+	"se me hizo tarde", "se me pasó la hora", "se me paso la hora",
+	"conexión tardía", "conexion tardia", "conexión tardia", "conexion tardía",
+];
+
+function matchesLateConnectionIntent(msgLower: string): boolean {
+	return LATE_CONNECTION_KEYWORDS.some((kw) => msgLower.includes(kw)) || matchesAbsenceIntent(msgLower);
 }
 
 function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
@@ -685,6 +708,11 @@ async function tryHorasDisponiblesReply(phone: string, message: string): Promise
 		console.error("[horas-disponibles] Error:", err);
 		return buildDirectReply("No pude consultar las horas disponibles en este momento. Intentá de nuevo en unos minutos.");
 	}
+}
+
+/** Fecha actual en Argentina (YYYY-MM-DD) — usada cuando el agente no menciona una fecha explícita. */
+function todayDateAR(): string {
+	return new Date(new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" })).toISOString().slice(0, 10);
 }
 
 /** Returns true if the given YYYY-MM-DD date falls within the current Mon–Sun week in Argentina time. */
@@ -1026,6 +1054,27 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 		return buildDirectReply("Las programaciones no están configuradas. Contactá al TL.");
 	}
 
+	// El historial de eliminaciones se registra en la planilla del Monitor (misma de
+	// offline_queue_sheet_id), no en la de Presentismo — ahí queda centralizado con el resto
+	// de las acciones que el bot ejecuta sobre los agentes.
+	const logSheetId = (settings.offline_queue_sheet_id as string) || "";
+
+	// Ya tenemos la fecha resuelta de un turno anterior y estamos esperando el motivo por el
+	// que se conectó tarde — este mensaje es la respuesta, no una fecha ni un nuevo pedido.
+	const pendingDate = await redisClient.get(pendingAbsenceDateKey(phone));
+	if (pendingDate) {
+		const motivo = message.trim();
+		if (!motivo) {
+			return buildDirectReply(
+				"Necesito el motivo por el que te conectaste tarde ese día 📝",
+				'Ej: "se me pasó la hora", "se me fue la luz un rato", "problema con el internet al iniciar"',
+			);
+		}
+		await redisClient.del(pendingAbsenceDateKey(phone));
+		await redisClient.del(pendingIntentKey(phone));
+		return await finalizeAbsenceRemoval(phone, profile.email, ids, pendingDate, motivo, logSheetId);
+	}
+
 	const targetDate = parseDateFromMessage(message);
 
 	if (!targetDate) {
@@ -1037,10 +1086,8 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 		);
 	}
 
-	// Date received — clear pending state
-	await redisClient.del(absencePendingKey(phone));
-
 	if (!isInCurrentWeekAR(targetDate)) {
+		await redisClient.del(pendingIntentKey(phone));
 		return buildDirectReply(
 			"⚠️ Solo podés eliminar ausentes de la semana actual directamente acá.",
 			"Para ausencias de semanas anteriores completá el siguiente formulario:",
@@ -1048,11 +1095,30 @@ async function tryRemoveAbsenceReply(phone: string, message: string): Promise<st
 		);
 	}
 
+	// Fecha válida — antes de tocar la planilla se pide el motivo de la conexión tardía,
+	// que va a quedar registrado junto con el correo y el día en la hoja de auditoría.
+	await redisClient.set(pendingAbsenceDateKey(phone), targetDate, "EX", PENDING_INTENT_TTL);
+	await redisClient.set(pendingIntentKey(phone), "absence_reason", "EX", PENDING_INTENT_TTL);
+	return buildDirectReply(
+		"Antes de eliminarla necesito un dato más 📝",
+		"¿Cuál fue el motivo por el que te conectaste tarde ese día?",
+	);
+}
+
+async function finalizeAbsenceRemoval(
+	phone:       string,
+	email:       string,
+	ids:         string[],
+	targetDate:  string,
+	motivo:      string,
+	logSheetId:  string,
+): Promise<string> {
 	try {
-		const result = await clearAgentAbsence(profile.email, ids, targetDate);
+		const result = await clearAgentAbsence(email, ids, targetDate);
 
 		if (result.success) {
-			const firstName = deriveFirstNameFromEmail(profile.email);
+			if (logSheetId) await logAbsenceRemoval(logSheetId, email, result.fecha, result.horario, motivo);
+			const firstName = deriveFirstNameFromEmail(email);
 			const detail = [result.fecha, result.horario].filter(Boolean).join(" — ");
 			return buildDirectReply(
 				firstName ? `✅ Listo, ${firstName}: ausente eliminado correctamente` : "✅ Ausente eliminado correctamente",
@@ -1204,6 +1270,89 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 	}
 }
 
+/**
+ * Igual que processFallasGroupReport pero para "me conecté tarde" / corrección de ausencia:
+ * junta el correo + motivo acumulados, resuelve la fecha (si no la mencionan, asume hoy) y
+ * corrige directamente la ausencia en la planilla — sin diálogo, misma política que el resto
+ * del grupo. El historial queda en la hoja "eliminacion de ausencia" del Monitor.
+ */
+async function processAbsenceCorrectionReport(phone: string, senderName: string, lastMsgKey?: any): Promise<void> {
+	const debounceKey = absenceGroupDebounceKey(phone);
+	const raw = await redisClient.get(debounceKey);
+	await redisClient.del(debounceKey);
+	if (!raw) return;
+
+	const parts: string[] = JSON.parse(raw);
+	const motivo = parts.join(" ").trim();
+	if (!motivo) return;
+
+	const emailMatch = motivo.match(EMAIL_REGEX);
+	const profile = await getAgentProfile(phone);
+	const email = profile?.email || (emailMatch ? emailMatch[0].toLowerCase() : undefined);
+	const targetDate = parseDateFromMessage(motivo) || todayDateAR();
+
+	try {
+		await notifyGroupFailureReport({
+			phone, senderName, email,
+			reason: `Corrección de ausencia (conexión tardía): ${motivo}`,
+			formStatus: "unknown", resolved: false,
+		});
+	} catch (err) {
+		console.error("[fallas-group] Error notificando a Telegram (corrección de ausencia):", err);
+	}
+
+	let reportId: number | null = null;
+	try {
+		const saved = await insertGroupFailureReport({ phone, senderName, email, reason: motivo, formStatus: "unknown" });
+		reportId = saved.id;
+	} catch (err) {
+		console.error("[fallas-group] Error guardando el reporte de corrección de ausencia:", err);
+	}
+
+	// Sin correo identificado no hay a quién corregirle la ausencia — se ignora sin pedir aclaraciones.
+	if (!email || reportId === null) return;
+	if (!(globalSock && isSocketConnected)) return;
+
+	const settings = await getSettings().catch(() => ({} as Record<string, unknown>));
+	const ids = [...new Set([
+		(settings.programacion_1_id as string) || "",
+		(settings.programacion_2_id as string) || "",
+	].filter(Boolean))];
+	const logSheetId = (settings.offline_queue_sheet_id as string) || "";
+	if (!ids.length) return;
+
+	if (!isInCurrentWeekAR(targetDate)) {
+		try {
+			await globalSock.sendMessage(lastMsgKey?.remoteJid as string, {
+				text: "⚠️ Solo puedo corregir ausencias de la semana actual acá. Para semanas anteriores completá el formulario:\nhttps://docs.google.com/forms/d/e/1FAIpQLSeQchP9yHLO7s2w48k0SN3dS-p-ibVzkw9MQJIDLIrsww8LHQ/viewform",
+			});
+		} catch (err) {
+			console.error("[fallas-group] Error avisando fuera de semana actual:", err);
+		}
+		return;
+	}
+
+	try {
+		const result = await clearAgentAbsence(email, ids, targetDate);
+		if (result.success) {
+			if (logSheetId) await logAbsenceRemoval(logSheetId, email, result.fecha, result.horario, motivo);
+			await markGroupFailureReportConfirmed(reportId, true);
+			if (lastMsgKey) {
+				await globalSock.sendMessage(lastMsgKey.remoteJid as string, {
+					react: { text: "✅", key: lastMsgKey },
+				});
+			}
+		} else if (result.reason === "not_found") {
+			await markGroupFailureReportConfirmed(reportId, false);
+			await globalSock.sendMessage(lastMsgKey?.remoteJid as string, {
+				text: `No encontré una ausencia registrada para vos el ${targetDate.split("-").reverse().join("/")}. Si creés que es un error, contactá al TL.`,
+			});
+		}
+	} catch (err) {
+		console.error("[fallas-group] Error procesando corrección de ausencia:", err);
+	}
+}
+
 /** Detecta un mensaje del grupo de fallas y programa su procesamiento agregado por agente. */
 async function handleFallasGroupMessage(msg: any): Promise<void> {
 	let text = extractGroupMessageText(msg).trim();
@@ -1291,6 +1440,32 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 			await notifyGroupFailureReport({ phone, senderName, reason: text, formStatus: "unknown", resolved: true });
 		} catch (err) {
 			console.error("[fallas-group] Error notificando resolución a Telegram:", err);
+		}
+		return;
+	}
+
+	// "Me conecté tarde" / corrección de ausencia — track separado del de fallas de conectividad,
+	// misma lógica de acumulación (junta correo + motivo repartidos en varios mensajes) pero
+	// termina corrigiendo la ausencia en la planilla en vez de encolar un offline.
+	const isLateConnectionReport = matchesLateConnectionIntent(lower);
+	const hasActiveAbsenceReport = absenceGroupTimers.has(phone);
+	if (isLateConnectionReport || hasActiveAbsenceReport) {
+		const absenceKey = absenceGroupDebounceKey(phone);
+		const absenceAccumulated: string[] = JSON.parse((await redisClient.get(absenceKey)) || "[]");
+		absenceAccumulated.push(text);
+		await redisClient.set(absenceKey, JSON.stringify(absenceAccumulated), "EX", FALLAS_GROUP_DEBOUNCE_TTL);
+		absenceGroupLastMsgKey.set(phone, msg.key);
+
+		if (!hasActiveAbsenceReport) {
+			const timer = setTimeout(() => {
+				absenceGroupTimers.delete(phone);
+				const lastMsgKey = absenceGroupLastMsgKey.get(phone);
+				absenceGroupLastMsgKey.delete(phone);
+				processAbsenceCorrectionReport(phone, senderName, lastMsgKey).catch((err) =>
+					console.error("[fallas-group] Error procesando corrección de ausencia:", err),
+				);
+			}, FALLAS_GROUP_DEBOUNCE_MS);
+			absenceGroupTimers.set(phone, timer);
 		}
 		return;
 	}
@@ -1625,10 +1800,12 @@ export const inboundHandler = createInboundHandler({
 				}
 
 				// Absence removal intent (Google Sheets write)
-				// Also catches multi-turn follow-ups where user provides the date after the bot asked
-				const hasPendingAbsence = conv && !!(await redisClient.get(absencePendingKey(conv.phone)));
-				const isAbsenceDateFollowUp = hasPendingAbsence && !!parseDateFromMessage(lastUserMsg);
-				if ((matchesAbsenceIntent(msgLower) || isAbsenceDateFollowUp) && conv) {
+				// Also catches multi-turn follow-ups: the date after the bot asked for it, or the
+				// motivo (por qué se conectó tarde) after the bot asked for that.
+				const pendingAbsence = conv ? await redisClient.get(pendingIntentKey(conv.phone)) : null;
+				const isAbsenceDateFollowUp = (pendingAbsence === "absence" || pendingAbsence === "absence_date") && !!parseDateFromMessage(lastUserMsg);
+				const isAbsenceReasonFollowUp = pendingAbsence === "absence_reason";
+				if ((matchesAbsenceIntent(msgLower) || isAbsenceDateFollowUp || isAbsenceReasonFollowUp) && conv) {
 					const reply = await tryRemoveAbsenceReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
 				}
