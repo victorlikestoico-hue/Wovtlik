@@ -1422,7 +1422,7 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 		if (globalSock && isSocketConnected) {
 			try {
 				await globalSock.sendMessage(msg.key.remoteJid as string, {
-					text: `Anoté tu correo como *${fullEmail}*. La próxima vez mandalo *completo*, con @ y dominio, para no tener que completarlo.`,
+					text: `Anoté tu correo como *${fullEmail}*. La próxima vez mandalo completo, con @dominio.`,
 				});
 			} catch (err) {
 				console.error("[fallas-group] Error respondiendo recordatorio de correo completo:", err);

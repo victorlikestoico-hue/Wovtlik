@@ -10,16 +10,15 @@ const FALLAS_TEMPLATE_COOLDOWN_KEY = "bot:fallas_template_last_sent";
 const FALLAS_TEMPLATE_COOLDOWN_SECONDS = 60 * 60;
 
 const FALLAS_TEMPLATE_MESSAGE = [
-	"📋 *Cómo reportar una falla en este grupo:*",
+	"📋 *Cómo reportar una falla:*",
+	"1️⃣ Correo con _ndo.ext → ej: victor.garces_ndo.ext@pedidosya.com",
+	"2️⃣ Motivo → luz, internet o HC",
+	"3️⃣ Tu LOB",
+	"4️⃣ Si ya llenaste el formulario de desconexión",
 	"",
-	"1️⃣ *Correo completo* → nombre.apellido_ndo.ext@pedidosya.com (ej: victor.garces_ndo.ext@pedidosya.com)",
-	'2️⃣ *Motivo* → "se fue la luz", "cayó el internet", "HC no carga"',
-	"3️⃣ *LOB* al que pertenecés",
-	"4️⃣ Si ya llenaste el *formulario de desconexión*",
+	"_Aplica por falla de luz, internet o HC._",
 	"",
-	"_Aplica si no podés retomar tus chats por falla de energía, internet o HC._",
-	"",
-	"📌 *¿Te conectaste tarde y te quedó una ausencia?* Contalo acá mismo con tu correo completo y el motivo (ej: \"llegué tarde, se me pasó la hora\") y te la corrijo.",
+	"📌 *¿Ausencia por conexión tardía?* Mandá tu correo + motivo acá mismo y te la corrijo.",
 ].join("\n");
 
 // Reintento corto cuando el socket todavía no terminó de autenticarse (recién arrancado el proceso).
