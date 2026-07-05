@@ -1235,12 +1235,22 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 					else if (profileLob && GO_PO_LOBS.includes(profileLob)) detectedGroup = "go_po";
 				}
 
-				// Sin LOB detectado (ni en el texto ni en el perfil), no hay a qué link mandarlo —
-				// se le pregunta directamente en vez de asumir un LOB por defecto.
+				// "tl de turno"/"tl de guardia" son frases genéricas, no un LOB. Si en cambio viene
+				// una abreviación o nombre puntual después de "tl de" (ej: "tl de aj", "tl de fraude")
+				// el agente ya especificó el LOB, aunque no sea uno de los dos grupos con link propio —
+				// en ese caso no hay que preguntarle nada, se le manda el link genérico de siempre.
+				const mentionedOtherLob = !detectedGroup
+					&& /\btl\s+de\s+([a-záéíóúñü]+)/i.test(lower)
+					&& !/\btl\s+de\s+(turno|guardia)\b/i.test(lower);
+
+				// Solo se pregunta el LOB cuando el mensaje es genérico de punta a punta (sin LOB
+				// en el texto, sin LOB en el perfil y sin ninguna otra abreviación/nombre mencionado).
 				const replyText = detectedGroup === "cs_sm"
 					? "Entrá acá 👇\nhttps://docs.google.com/spreadsheets/d/e/2PACX-1vSMBOfczLNvjS3nncoU6rGU_GWKbKo4hgzUqRFw6Fqql9IUP4rvenlfQLw7cWXT6EedJL1FEwTLAk0N/pubhtml?gid=176485234&single=true"
 					: detectedGroup === "go_po"
 					? "Entrá acá 👇\nhttps://docs.google.com/spreadsheets/d/e/2PACX-1vSMBOfczLNvjS3nncoU6rGU_GWKbKo4hgzUqRFw6Fqql9IUP4rvenlfQLw7cWXT6EedJL1FEwTLAk0N/pubhtml?gid=276469694&single=true"
+					: mentionedOtherLob
+					? "Entrá acá 👇\nhttps://script.google.com/a/macros/pedidosya.com/s/AKfycby0mvlKtQACyQyd7-tTWIUN-jAWV-L95ei0rhMCzyPzCRPzwWN3NWyGCtsa2fd4oRO6/exec\n\nBuscá la pestaña 📋 *TL Activo*"
 					: "¿TL de qué LOB necesitás? 🤔";
 				await globalSock.sendMessage(msg.key.remoteJid as string, { text: replyText });
 			} catch (err) {
