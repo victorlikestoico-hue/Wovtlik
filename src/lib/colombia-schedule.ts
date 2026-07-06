@@ -12,12 +12,6 @@ export function isWithinColombiaSendWindow(): boolean {
 	return currentHourColombia() >= 6;
 }
 
-/** Fecha actual en Colombia como YYYY-MM-DD, para comparar contra fechas normalizadas de la hoja. */
-export function currentDateColombiaISO(): string {
-	const parts = new Date().toLocaleDateString("en-CA", { timeZone: COLOMBIA_TZ }); // en-CA => YYYY-MM-DD
-	return parts;
-}
-
 /**
  * Milisegundos hasta el próximo HH:00:00 (hora en punto). Usa UTC para el cálculo porque
  * el offset de Colombia (UTC-5) es un número entero de horas, así que el tope de hora

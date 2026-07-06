@@ -3,7 +3,7 @@ import { Redis } from "ioredis";
 import { getSettings } from "../src/lib/db.ts";
 import { getHorasCubrir, isHoraCubrirHHEE, normalizeFecha, type HoraCubrirEntry } from "../src/lib/sheets-client.ts";
 import { generateCreativeText } from "../src/lib/ai-providers.ts";
-import { isWithinColombiaSendWindow, msUntilNextTopOfHour, currentDateColombiaISO } from "../src/lib/colombia-schedule.ts";
+import { isWithinColombiaSendWindow, msUntilNextTopOfHour } from "../src/lib/colombia-schedule.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
@@ -17,22 +17,51 @@ const ANUNCIOS_HORAS_GROUP_JID = "120363048382543444@g.us";
 // Reintento corto cuando el socket todavía no terminó de autenticarse (recién arrancado el proceso).
 const HORAS_CUBRIR_NOT_READY_RETRY_MS = 30_000;
 
-/** Parsea "HH:mm - HH:mm" a cantidad de horas, soportando turnos que cruzan medianoche. */
-function parseHorarioHours(horario: string): number | null {
+// Las horas de la hoja "horas-cubrir" están en horario de Uruguay, no de Colombia — el filtro
+// de turnos ya pasados y el tag "(HOY)" tienen que calcularse con esa zona horaria, aunque el
+// anuncio se dispare siguiendo la ventana de envío en hora Colombia.
+const URUGUAY_TZ = "America/Montevideo";
+
+function currentDateUruguayISO(): string {
+	return new Date().toLocaleDateString("en-CA", { timeZone: URUGUAY_TZ }); // en-CA => YYYY-MM-DD
+}
+
+function currentMinutesUruguay(): number {
+	const d = new Date(new Date().toLocaleString("en-US", { timeZone: URUGUAY_TZ }));
+	return d.getHours() * 60 + d.getMinutes();
+}
+
+/** Parsea "HH:mm - HH:mm" a minutos de inicio/fin, soportando turnos que cruzan medianoche. */
+function parseHorarioRange(horario: string): { start: number; end: number } | null {
 	const m = horario.match(/(\d{1,2}):(\d{2})\s*[-–]\s*(\d{1,2}):(\d{2})/);
 	if (!m) return null;
 	const start = parseInt(m[1]) * 60 + parseInt(m[2]);
 	let end = parseInt(m[3]) * 60 + parseInt(m[4]);
 	if (end <= start) end += 24 * 60;
-	return (end - start) / 60;
+	return { start, end };
+}
+
+function parseHorarioHours(horario: string): number | null {
+	const range = parseHorarioRange(horario);
+	return range ? (range.end - range.start) / 60 : null;
 }
 
 function sumHours(slots: HoraCubrirEntry[]): number {
 	return slots.reduce((total, s) => total + (parseHorarioHours(s.horario) ?? 0), 0);
 }
 
-function buildPrompt(entries: HoraCubrirEntry[]): string {
-	const today = currentDateColombiaISO();
+/** true si el turno todavía no terminó (hora Uruguay) — filtra los que ya pasaron para hoy. */
+function isSlotStillAvailable(entry: HoraCubrirEntry, todayUY: string, nowMinUY: number): boolean {
+	const fechaNorm = normalizeFecha(entry.fecha);
+	if (!fechaNorm) return true; // fecha no reconocible, no filtramos por las dudas
+	if (fechaNorm < todayUY) return false; // día ya pasado
+	if (fechaNorm > todayUY) return true; // día futuro, todavía no llega
+	const range = parseHorarioRange(entry.horario);
+	if (!range) return true; // horario no parseable, no filtramos por las dudas
+	return range.end > nowMinUY;
+}
+
+function buildPrompt(entries: HoraCubrirEntry[], today: string): string {
 	const fmtSlot = (s: HoraCubrirEntry) => {
 		const isToday = normalizeFecha(s.fecha) === today;
 		return `${s.fecha} ${s.horario}${isToday ? " (HOY)" : ""}`;
@@ -61,15 +90,16 @@ function buildPrompt(entries: HoraCubrirEntry[]): string {
 
 	return [
 		"Sos el asistente que anuncia horas disponibles para cubrir, en un grupo de WhatsApp de agentes de Customer Success que trabajan 100% desde casa (home office).",
-		`Hoy es ${today} (hora Colombia). A continuación tenés, por LOB, las horas sin cubrir ya separadas en dos grupos: HHEE (pagan un plus) y normales (NO pagan extra). Los turnos marcados con "(HOY)" son del día de hoy.`,
+		`Hoy es ${today} (hora Uruguay — los horarios de la lista están en esa zona horaria). A continuación tenés, por LOB, las horas sin cubrir ya separadas en dos grupos: HHEE (pagan un plus) y normales (NO pagan extra). Los turnos marcados con "(HOY)" son del día de hoy y los que ya pasaron fueron descartados de la lista.`,
 		"CRÍTICO: nunca sumes, mezcles ni generalices las horas HHEE con las normales de un mismo LOB ni de LOBs distintos — son conceptos de pago distintos y deben quedar diferenciados en el mensaje.",
 		"No recalcules los totales de horas: usá tal cual los números que te paso, no los reinterpretes ni los redondees.",
 		"CRÍTICO: mostrá TODAS las horas de la lista (de hoy y de otros días), pero priorizá y resaltá primero, con más énfasis, las que son de HOY (son las más urgentes de cubrir). Las de otros días van después, en un tono más secundario.",
-		"Con esa información, escribí UN solo mensaje para WhatsApp, breve, con emojis, que convenza a los agentes de anotarse.",
-		"CRÍTICO: los agentes NO leen mensajes largos. Andá directo al grano: máximo 6-8 líneas cortas en total, una idea por línea, cero relleno ni frases de más. Preferí listas cortas por LOB en vez de párrafos.",
+		"CRÍTICO: por cada turno tenés que indicar el horario exacto (HH:mm - HH:mm) y la fecha, no solo la cantidad total de horas — a un agente no le sirve saber que \"hay 5 horas hoy\", necesita saber en qué rango horario son para decidir si puede cubrirlas. No agrupes ni resumas los horarios en un solo número.",
+		"Con esa información, escribí UN solo mensaje para WhatsApp, con emojis, que convenza a los agentes de anotarse.",
+		"El mensaje puede ser un poco más largo de lo habitual para poder listar cada horario exacto — priorizá que sea claro y completo antes que ultra breve, pero sin relleno ni frases de más: cada línea tiene que aportar información (un LOB, un horario, un dato útil).",
 		"El tono tiene que ser FORMAL y profesional (es una comunicación de la operación a su equipo), pero persuasivo: no uses jerga ni modismos coloquiales, tratá de usted o de forma neutra, y sin embargo dejá clara la conveniencia de anotarse.",
 		"Vendé el plan en UNA sola frase corta y formal, aprovechando que son agentes de home office (sin salir de casa, sin transporte). No te extiendas en esto.",
-		"Nombrá explícitamente TODOS los LOBs de la lista, indicando para cada uno cuántas horas HHEE y cuántas normales hay (omití el grupo que esté vacío en ese LOB), pero en una línea corta por LOB, sin explicaciones extra.",
+		"Nombrá explícitamente TODOS los LOBs de la lista, indicando para cada uno los horarios exactos disponibles (HHEE y normales por separado, omitiendo el grupo que esté vacío en ese LOB).",
 		"CRÍTICO: el mensaje SIEMPRE tiene que indicar, en una sola línea corta, que estas horas están disponibles para anotarse en el aplicativo de cambios de turno, sección *Horas Disponibles*. No omitas esto ni lo expliques de más.",
 		"No inventes datos que no estén en la lista.",
 		"Usá formato de WhatsApp para negrita (un asterisco de cada lado, ej: *texto*), nunca markdown tipo ** o ##.",
@@ -105,10 +135,15 @@ export async function runHorasCubrirCronOnce(): Promise<"sent" | "skipped" | "em
 			return "error";
 		}
 
-		const entries = await getHorasCubrir(ids);
+		const rawEntries = await getHorasCubrir(ids);
+		const todayUY = currentDateUruguayISO();
+		const nowMinUY = currentMinutesUruguay();
+		// Los horarios están en hora Uruguay — se descartan los turnos de hoy que ya terminaron
+		// para no anunciar horas que ya no se pueden cubrir.
+		const entries = rawEntries.filter((e) => isSlotStillAvailable(e, todayUY, nowMinUY));
 		if (!entries.length) return "empty";
 
-		const message = await generateCreativeText(buildPrompt(entries), settings);
+		const message = await generateCreativeText(buildPrompt(entries, todayUY), settings);
 
 		await globalSock.sendMessage(ANUNCIOS_HORAS_GROUP_JID, { text: message });
 		await redisClient.set(HORAS_CUBRIR_COOLDOWN_KEY, Date.now().toString(), "EX", HORAS_CUBRIR_COOLDOWN_SECONDS);
