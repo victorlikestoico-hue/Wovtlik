@@ -393,6 +393,18 @@ function isResolvedReportMessage(text: string): boolean {
 	return RESOLVED_REPORT_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
+// El correo de ejemplo que usamos en la plantilla de "cómo reportar una falla". Si un TL (u otro
+// agente) reenvía esa plantilla al grupo como recordatorio, jamás debe tratarse como el correo
+// de un agente real reportando algo — ni tampoco procesarse como un reporte en sí.
+const TEMPLATE_EXAMPLE_EMAIL = "victor.garces_ndo.ext@pedidosya.com";
+
+/** true si el texto es (o incluye) la plantilla informativa de "cómo reportar una falla", reenviada como recordatorio. */
+function isReportTemplateMessage(text: string): boolean {
+	const lower = text.toLowerCase();
+	return lower.includes("cómo reportar una falla") || lower.includes("como reportar una falla")
+		|| lower.includes(TEMPLATE_EXAMPLE_EMAIL);
+}
+
 // Pending intent system: when any handler finds no profile it saves the intent
 // type so that tryRegisterEmailReply can chain back to the right flow.
 type PendingIntent =
@@ -1226,10 +1238,12 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 	if (!reason) return; // sin motivo no hay nada que procesar
 
 	const emailMatch = reason.match(EMAIL_REGEX);
+	const matchedEmail = emailMatch ? emailMatch[0].toLowerCase() : undefined;
 	const profile = await getAgentProfile(phone);
 	// Si el número ya está registrado, su correo verificado manda siempre — un correo
-	// suelto en el texto (typo, el de un compañero, etc.) nunca debe pisarlo.
-	const email = profile?.email || (emailMatch ? emailMatch[0].toLowerCase() : undefined);
+	// suelto en el texto (typo, el de un compañero, etc.) nunca debe pisarlo. El correo de
+	// ejemplo de la plantilla nunca cuenta como correo real, aunque haya quedado pegado al texto.
+	const email = profile?.email || (matchedEmail && matchedEmail !== TEMPLATE_EXAMPLE_EMAIL ? matchedEmail : undefined);
 	const formStatus = detectFormStatus(reason);
 	const lob = extractLobFromText(reason) ?? undefined;
 	const failureType = classifyFailureReason(reason);
@@ -1287,8 +1301,10 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 	if (!motivo) return;
 
 	const emailMatch = motivo.match(EMAIL_REGEX);
+	const matchedEmail = emailMatch ? emailMatch[0].toLowerCase() : undefined;
 	const profile = await getAgentProfile(phone);
-	const email = profile?.email || (emailMatch ? emailMatch[0].toLowerCase() : undefined);
+	// El correo de ejemplo de la plantilla nunca cuenta como correo real.
+	const email = profile?.email || (matchedEmail && matchedEmail !== TEMPLATE_EXAMPLE_EMAIL ? matchedEmail : undefined);
 	const targetDate = parseDateFromMessage(motivo) || todayDateAR();
 
 	try {
@@ -1363,6 +1379,11 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 
 	const senderName = (msg.pushName as string) || phone;
 	const lower = text.toLowerCase();
+
+	// Alguien (un TL, otro agente) reenvió la plantilla de "cómo reportar una falla" como
+	// recordatorio — es puramente informativa, no un reporte real. Se ignora por completo:
+	// no debe acumularse, ni cargarse a Telegram/DB/sheet.
+	if (isReportTemplateMessage(text)) return;
 
 	// Consulta por el TL en turno → responder directamente en el grupo
 	if (matchesTlTurnoQuery(lower)) {
