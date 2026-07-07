@@ -442,6 +442,10 @@ function matchesAbsenceIntent(msgLower: string): boolean {
 // Frases de "me conecté tarde" en el grupo de fallas — el agente casi nunca dice "ausencia" o
 // "eliminar", solo cuenta que llegó tarde. Se combina con matchesAbsenceIntent para cubrir
 // también a quien sí pide la corrección explícitamente ("quitar mi ausente", etc.).
+// OJO: "conexión tardía"/"conexion tardia" NO están acá a propósito — es la misma frase del
+// CTA del template de fallas ("¿Ausencia por conexión tardía?"), así que un agente reportando
+// una falla real (luz/HC/internet) que cita esa frase terminaba cayendo en este flujo (que solo
+// limpia la ausencia) y nunca llegaba a encolarse como offline (que es lo que excusa los chats).
 const LATE_CONNECTION_KEYWORDS = [
 	"llegué tarde", "llegue tarde", "llegó tarde", "llego tarde",
 	"me conecté tarde", "me conecte tarde", "me conecto tarde",
@@ -449,7 +453,6 @@ const LATE_CONNECTION_KEYWORDS = [
 	"entré tarde", "entre tarde", "entró tarde", "entro tarde",
 	"me atrasé", "me atrase", "me atrasó", "me atraso",
 	"se me hizo tarde", "se me pasó la hora", "se me paso la hora",
-	"conexión tardía", "conexion tardia", "conexión tardia", "conexion tardía",
 ];
 
 function matchesLateConnectionIntent(msgLower: string): boolean {
