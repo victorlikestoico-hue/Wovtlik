@@ -209,7 +209,8 @@ export type AbsenceEntry = { fecha: string; horario: string };
 export type AbsenceClearResult =
 	| { success: true;  fecha: string; horario: string }
 	| { success: false; reason: "no_sa" | "not_found" | "error"; message: string }
-	| { success: false; reason: "multiple"; absences: AbsenceEntry[] };
+	| { success: false; reason: "multiple"; absences: AbsenceEntry[] }
+	| { success: false; reason: "ctt_ceded"; fecha: string; horario: string };
 
 /**
  * Clear an "Ausente" entry for an agent.
@@ -241,6 +242,7 @@ export async function clearAgentAbsence(
 		fecha:         string; // raw from sheet
 		horario:       string;
 		fechaNorm:     string; // YYYY-MM-DD
+		cedida:        boolean; // Novedades contiene "ctt" → el agente cedió el turno completo
 	};
 
 	const all: Candidate[] = [];
@@ -254,6 +256,7 @@ export async function clearAgentAbsence(
 			const horarioCol     = headers.findIndex(h => /^horario\s*roster$/i.test(h));
 			const estadoCol      = headers.findIndex(h => /^estado$/i.test(h));
 			const asistenciaCol  = headers.findIndex(h => /^asistencia$/i.test(h));
+			const novedCol       = headers.findIndex(h => /^novedades$/i.test(h));
 			if (emailCol < 0 || fechaCol < 0 || estadoCol < 0) continue;
 
 			for (const { rowIndex, cells } of rows) {
@@ -262,6 +265,7 @@ export async function clearAgentAbsence(
 				if (rowEmail !== emailNorm) continue;
 				if (!rowEstado.includes("ausente")) continue;
 				const rawFecha = cells[fechaCol] ?? "";
+				const rowNoved = novedCol >= 0 ? (cells[novedCol] ?? "").toLowerCase() : "";
 				all.push({
 					sheetId:   id,
 					rowIndex,
@@ -270,6 +274,7 @@ export async function clearAgentAbsence(
 					fecha:     rawFecha,
 					horario:   horarioCol >= 0 ? (cells[horarioCol] ?? "") : "",
 					fechaNorm: normalizeFecha(rawFecha),
+					cedida:    rowNoved.includes("ctt"),
 				});
 			}
 		} catch (err) {
@@ -289,6 +294,17 @@ export async function clearAgentAbsence(
 
 	if (candidates.length === 0) {
 		return { success: false, reason: "not_found", message: "No se encontró ausente para esa fecha" };
+	}
+
+	// Las ausencias marcadas con "ctt" en Novedades corresponden a un turno cedido por completo
+	// por el agente — no son un error del sistema, así que nunca se auto-eliminan.
+	const cedidas = candidates.filter(c => c.cedida);
+	candidates = candidates.filter(c => !c.cedida);
+	if (candidates.length === 0) {
+		const c = cedidas[0];
+		return c
+			? { success: false, reason: "ctt_ceded", fecha: c.fecha, horario: c.horario }
+			: { success: false, reason: "not_found", message: "No se encontró ausente para esa fecha" };
 	}
 
 	// If no date was specified and there are absences on more than one distinct day → ask

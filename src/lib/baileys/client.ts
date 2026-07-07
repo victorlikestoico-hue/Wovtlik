@@ -1164,6 +1164,13 @@ async function finalizeAbsenceRemoval(
 			);
 		}
 
+		if (result.reason === "ctt_ceded") {
+			return buildDirectReply(
+				"⚠️ Esa ausencia no se puede eliminar: figura como turno cedido (CTT).",
+				"Si creés que es un error, consultá con el TL.",
+			);
+		}
+
 		return buildDirectReply("No pude procesar tu solicitud en este momento. Intentá de nuevo.");
 	} catch (err) {
 		console.error("[absence] Error:", err);
@@ -1365,6 +1372,11 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 			await markGroupFailureReportConfirmed(reportId, false);
 			await globalSock.sendMessage(lastMsgKey?.remoteJid as string, {
 				text: `No encontré una ausencia registrada para vos el ${targetDate.split("-").reverse().join("/")}. Si creés que es un error, contactá al TL.`,
+			});
+		} else if (result.reason === "ctt_ceded") {
+			await markGroupFailureReportConfirmed(reportId, false);
+			await globalSock.sendMessage(lastMsgKey?.remoteJid as string, {
+				text: "⚠️ Esa ausencia no se puede corregir: figura como turno cedido (CTT). Si creés que es un error, contactá al TL.",
 			});
 		}
 	} catch (err) {
