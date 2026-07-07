@@ -165,6 +165,9 @@ const OFFLINE_KEYWORDS = [
 	"se está actualizando mi pc", "se esta actualizando mi pc",
 	"está actualizando mi equipo", "esta actualizando mi equipo",
 	"mi equipo está actualizando", "mi equipo esta actualizando",
+	// "reinici*" cubre "reiniciar", "reiniciando", "reinicio", "reinicié", etc. — el agente
+	// casi nunca dice "falla" o "dañó", solo avisa que está reiniciando el equipo/pc.
+	"reinici",
 	// Falla del aplicativo HC (donde están los chats)
 	"hc no funciona", "hc no carga", "hc lento", "hc lenta", "lentitud en hc",
 	"el hc no funciona", "el hc no carga", "se cae el hc", "se cae hc",
@@ -304,7 +307,11 @@ function findEmbeddedPartialEmailToken(text: string): string | null {
 	const tokens = text.split(/\s+/);
 	for (const rawToken of tokens) {
 		const token = rawToken.replace(/^[^\wáéíóúñ]+|[^\wáéíóúñ]+$/gi, "");
-		if (!token || PARTIAL_EMAIL_FALSE_POSITIVE_EXT.test(token)) continue;
+		if (!token) continue;
+		// Excepción a la exclusión de ".com": este patrón exacto es el typo del sufijo
+		// corporativo sin arroba, no un archivo adjunto — se reconoce igual.
+		if (CORPORATE_EMAIL_TYPO_RE.test(token)) return token;
+		if (PARTIAL_EMAIL_FALSE_POSITIVE_EXT.test(token)) continue;
 		if (matchesPartialEmail(token)) return token;
 	}
 	return null;
@@ -317,10 +324,18 @@ function findEmbeddedPartialEmailToken(text: string): string | null {
 const CORPORATE_EMAIL_SUFFIX = "_ndo.ext";
 const CORPORATE_EMAIL_DOMAIN = "@pedidosya.com";
 
+// Typo frecuente: al agente se le va la mano y escribe ".com" en vez de "@pedidosya.com"
+// después del sufijo corporativo (le falta la arroba), ej. "cristian.david_ndo.ext.com".
+// Sin este caso especial, PARTIAL_EMAIL_FALSE_POSITIVE_EXT lo descarta por terminar en ".com"
+// (pensando que es un archivo adjunto) y el correo real nunca se reconstruye.
+const CORPORATE_EMAIL_TYPO_RE = /^([\wáéíóúñ+%-]+(?:\.[\wáéíóúñ+%-]+)+_ndo\.ext)\.com$/i;
+
 /** "victor.garces" → "victor.garces_ndo.ext@pedidosya.com" (no duplica el sufijo si ya viene incluido). */
 function buildFullCorporateEmail(localPart: string): string {
-	const hasSuffix = localPart.toLowerCase().endsWith(CORPORATE_EMAIL_SUFFIX);
-	return `${localPart}${hasSuffix ? "" : CORPORATE_EMAIL_SUFFIX}${CORPORATE_EMAIL_DOMAIN}`;
+	const typoMatch = localPart.match(CORPORATE_EMAIL_TYPO_RE);
+	const base = typoMatch ? typoMatch[1] : localPart;
+	const hasSuffix = base.toLowerCase().endsWith(CORPORATE_EMAIL_SUFFIX);
+	return `${base}${hasSuffix ? "" : CORPORATE_EMAIL_SUFFIX}${CORPORATE_EMAIL_DOMAIN}`;
 }
 
 const fallasGroupDebounceKey = (phone: string) => `bot:fallas_group_debounce:${phone}`;

@@ -12,6 +12,11 @@ export function isWithinColombiaSendWindow(): boolean {
 	return currentHourColombia() >= 6;
 }
 
+/** Fecha actual en Colombia (YYYY-MM-DD), para trackear qué se envió "hoy" sin depender del huso del servidor. */
+export function currentDateColombiaISO(): string {
+	return new Date().toLocaleDateString("en-CA", { timeZone: COLOMBIA_TZ });
+}
+
 /**
  * Milisegundos hasta el próximo HH:00:00 (hora en punto). Usa UTC para el cálculo porque
  * el offset de Colombia (UTC-5) es un número entero de horas, así que el tope de hora

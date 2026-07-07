@@ -3,7 +3,7 @@ import { Redis } from "ioredis";
 import { getSettings } from "../src/lib/db.ts";
 import { getHorasCubrir, isHoraCubrirHHEE, normalizeFecha, type HoraCubrirEntry } from "../src/lib/sheets-client.ts";
 import { generateCreativeText } from "../src/lib/ai-providers.ts";
-import { isWithinColombiaSendWindow, msUntilNextTopOfHour } from "../src/lib/colombia-schedule.ts";
+import { currentDateColombiaISO, isWithinColombiaSendWindow, msUntilNextTopOfHour } from "../src/lib/colombia-schedule.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
@@ -11,6 +11,12 @@ const HORAS_CUBRIR_COOLDOWN_KEY = "bot:horas_cubrir_last_sent";
 // Traba para no duplicar el envío si el bot se reinicia varias veces dentro de la
 // ventana de 1h (deploys, crashes, etc.), igual que fallas-template-cron.
 const HORAS_CUBRIR_COOLDOWN_SECONDS = 60 * 60;
+
+// El listado completo y formal (con cada horario exacto) solo se manda una vez por día,
+// en el primer tick del día que tenga horas para anunciar. Los ticks siguientes de ese
+// mismo día mandan un recordatorio corto e informal en vez de repetir la lista entera.
+const HORAS_CUBRIR_FULL_SENT_DATE_KEY = "bot:horas_cubrir_full_sent_date";
+const HORAS_CUBRIR_FULL_SENT_TTL_SECONDS = 25 * 60 * 60;
 
 const ANUNCIOS_HORAS_GROUP_JID = "120363048382543444@g.us";
 
@@ -61,7 +67,8 @@ function isSlotStillAvailable(entry: HoraCubrirEntry, todayUY: string, nowMinUY:
 	return range.end > nowMinUY;
 }
 
-function buildPrompt(entries: HoraCubrirEntry[], today: string): string {
+/** Arma el resumen "- LOB: Xh HHEE — horarios | Yh normales — horarios", una línea por LOB. */
+function buildResumenByLob(entries: HoraCubrirEntry[], today: string): string {
 	const fmtSlot = (s: HoraCubrirEntry) => {
 		const isToday = normalizeFecha(s.fecha) === today;
 		return `${s.fecha} ${s.horario}${isToday ? " (HOY)" : ""}`;
@@ -75,7 +82,7 @@ function buildPrompt(entries: HoraCubrirEntry[], today: string): string {
 		(isHoraCubrirHHEE(e) ? bucket.hhee : bucket.normal).push(e);
 	}
 
-	const resumen = [...byLob.entries()]
+	return [...byLob.entries()]
 		.map(([lob, { hhee, normal }]) => {
 			const partes: string[] = [];
 			if (hhee.length) {
@@ -87,6 +94,10 @@ function buildPrompt(entries: HoraCubrirEntry[], today: string): string {
 			return `- ${lob}: ${partes.join(" | ")}`;
 		})
 		.join("\n");
+}
+
+function buildFullPrompt(entries: HoraCubrirEntry[], today: string): string {
+	const resumen = buildResumenByLob(entries, today);
 
 	return [
 		"Sos el asistente que anuncia horas disponibles para cubrir, en un grupo de WhatsApp de agentes de Customer Success que trabajan 100% desde casa (home office).",
@@ -106,6 +117,31 @@ function buildPrompt(entries: HoraCubrirEntry[], today: string): string {
 		"No agregues instrucciones de cómo anotarse (eso ya lo sabe el equipo). Devolvé solo el texto final del mensaje, sin comillas ni bloques de código.",
 		"",
 		"LOBs con horas sin cubrir:",
+		resumen,
+	].join("\n");
+}
+
+/**
+ * El listado completo ya se mandó hoy (más temprano) — este es el recordatorio de las
+ * horas que siguen sin cubrirse. Tiene que sonar a alguien del equipo insistiendo por su
+ * cuenta, no a la repetición del anuncio formal de la mañana.
+ */
+function buildReminderPrompt(entries: HoraCubrirEntry[], today: string): string {
+	const resumen = buildResumenByLob(entries, today);
+
+	return [
+		"Sos parte del equipo de operación de Customer Success (agentes 100% home office) y ya se mandó, más temprano hoy, el anuncio formal y completo con el listado detallado de horas disponibles para cubrir.",
+		`Hoy es ${today} (hora Uruguay). A continuación tenés, por LOB, las horas que TODAVÍA siguen sin cubrirse (ya se descartaron las que pasaron o se llenaron).`,
+		"Este es un recordatorio, no el anuncio completo: NO repitas el listado detallado turno por turno ni menciones todos los LOBs — elegí como máximo 1 o 2 franjas que sean las más urgentes o llamativas (priorizá las de HOY) y usalas de gancho.",
+		"Escribí UN mensaje CORTO para WhatsApp (2 a 4 líneas), como si lo tipeara una persona del equipo recordando por las suyas que todavía hay horas libres — no como una comunicación oficial repetida. Tono cercano e informal, casual, sin sonar a copy/paste del mensaje anterior.",
+		"Podés variar la forma de arrancar y el enfoque (no siempre el mismo template) para que no se sienta repetitivo entre recordatorios.",
+		"Mencioná brevemente, en algún punto, que se anotan en el aplicativo de cambios de turno, sección *Horas Disponibles* — sin explicarlo de más.",
+		"No inventes datos ni horarios que no estén en la lista.",
+		"Usá como mucho 1 o 2 emojis, sin forzarlos.",
+		"Usá formato de WhatsApp para negrita (un asterisco de cada lado, ej: *texto*), nunca markdown tipo ** o ##.",
+		"Devolvé solo el texto final del mensaje, sin comillas ni bloques de código.",
+		"",
+		"LOBs con horas sin cubrir (para elegir el gancho, no para listar todo):",
 		resumen,
 	].join("\n");
 }
@@ -143,10 +179,19 @@ export async function runHorasCubrirCronOnce(): Promise<"sent" | "skipped" | "em
 		const entries = rawEntries.filter((e) => isSlotStillAvailable(e, todayUY, nowMinUY));
 		if (!entries.length) return "empty";
 
-		const message = await generateCreativeText(buildPrompt(entries, todayUY), settings);
+		const todayCO = currentDateColombiaISO();
+		const fullSentDate = await redisClient.get(HORAS_CUBRIR_FULL_SENT_DATE_KEY);
+		const isFirstOfDay = fullSentDate !== todayCO;
+		const prompt = isFirstOfDay
+			? buildFullPrompt(entries, todayUY)
+			: buildReminderPrompt(entries, todayUY);
+		const message = await generateCreativeText(prompt, settings);
 
 		await globalSock.sendMessage(ANUNCIOS_HORAS_GROUP_JID, { text: message });
 		await redisClient.set(HORAS_CUBRIR_COOLDOWN_KEY, Date.now().toString(), "EX", HORAS_CUBRIR_COOLDOWN_SECONDS);
+		if (isFirstOfDay) {
+			await redisClient.set(HORAS_CUBRIR_FULL_SENT_DATE_KEY, todayCO, "EX", HORAS_CUBRIR_FULL_SENT_TTL_SECONDS);
+		}
 		return "sent";
 	} catch (err) {
 		console.error("[horas-cubrir-cron] Error crítico ejecutando el tick:", err);
