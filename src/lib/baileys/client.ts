@@ -1738,6 +1738,31 @@ let profilePicInterval: NodeJS.Timeout | null = null;
 let disconnectionAlertTimer: NodeJS.Timeout | null = null;
 const DISCONNECTION_ALERT_MINUTES = 10;
 
+// Cola global de envíos salientes de respuestas reactivas (IA -> agentes).
+// Sin esto, si varios agentes escriben casi al mismo tiempo, el bot les contesta
+// a todos en paralelo: ese patrón (un número respondiendo automáticamente a muchos
+// contactos distintos a la vez) es la señal de bot/spam más fuerte para WhatsApp.
+// Serializamos los envíos y los espaciamos con el mismo pacing que usan los crons.
+let sendChainPromise: Promise<void> = Promise.resolve();
+let queuedSendCount = 0;
+
+function enqueueSocketSend<T>(task: () => Promise<T>): Promise<T> {
+	queuedSendCount++;
+	const shouldWait = queuedSendCount > 1;
+	const chained = sendChainPromise.then(async () => {
+		if (shouldWait) await waitBetweenSends();
+		return task();
+	});
+	sendChainPromise = chained.then(
+		() => undefined,
+		() => undefined,
+	);
+	chained.finally(() => {
+		queuedSendCount--;
+	});
+	return chained;
+}
+
 // Creamos el Inbound Handler inyectando las dependencias necesarias
 export const inboundHandler = createInboundHandler({
 	now: () => new Date(),
@@ -1980,11 +2005,13 @@ export const inboundHandler = createInboundHandler({
 		});
 	},
 	sendMessage: async (jid, text) => {
-		if (globalSock && isSocketConnected) {
-			await globalSock.sendMessage(jid, { text });
-		} else {
-			throw new Error("[bot] Socket no conectado o no listo. No se puede enviar mensaje.");
-		}
+		await enqueueSocketSend(async () => {
+			if (globalSock && isSocketConnected) {
+				await globalSock.sendMessage(jid, { text });
+			} else {
+				throw new Error("[bot] Socket no conectado o no listo. No se puede enviar mensaje.");
+			}
+		});
 	},
 	notifyTelegramHumanNeeded: async (payload) => {
 		await notifyTelegramHumanNeeded({
