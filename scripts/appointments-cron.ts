@@ -8,7 +8,6 @@ import {
 	enqueueOutbox,
 	getAgentProfile,
 } from "../src/lib/db.ts";
-import { waitBetweenSends } from "../src/lib/send-pacing.ts";
 
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
 const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -26,8 +25,7 @@ export async function runAppointmentsCronOnce(): Promise<void> {
 		const leadMinutes = Number(settings.appointment_reminder_lead_minutes ?? 60);
 		const rows = await getPendingAppointmentReminders(leadMinutes);
 
-		for (const [index, row] of rows.entries()) {
-			if (index > 0) await waitBetweenSends();
+		for (const row of rows) {
 			try {
 				const appointmentLocal = new Date(row.appointment_at).toLocaleString("es-AR", {
 					timeZone: "America/Argentina/Buenos_Aires",
@@ -44,14 +42,16 @@ export async function runAppointmentsCronOnce(): Promise<void> {
 				}
 
 				if (row.agent_phone) {
-					const { globalSock } = await import("../src/lib/baileys/client.ts");
+					const { globalSock, sendViaGlobalSock } = await import("../src/lib/baileys/client.ts");
 					// sock.user.id solo existe una vez autenticado; globalSock ya existe antes de eso
 					// y llamar sendMessage en ese punto rompe dentro de Baileys (authState.creds.me undefined),
 					// lo que terminaría marcando el recordatorio como enviado sin haber avisado al agente.
 					if (globalSock?.user?.id) {
-						await globalSock.sendMessage(`${row.agent_phone}@s.whatsapp.net`, {
-							text: `📅 Recordatorio: tenés una cita con ${row.client_name ?? row.client_phone ?? "un cliente"} para ${appointmentLocal}.`,
-						});
+						await sendViaGlobalSock(
+							`${row.agent_phone}@s.whatsapp.net`,
+							{ text: `📅 Recordatorio: tenés una cita con ${row.client_name ?? row.client_phone ?? "un cliente"} para ${appointmentLocal}.` },
+							{ kind: "cron" },
+						);
 					} else {
 						console.warn(`[appointments-cron] Socket todavía no autenticado, no se pudo avisar al agente #${row.id}.`);
 					}

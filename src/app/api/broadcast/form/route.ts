@@ -1,7 +1,9 @@
+import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { authErrorToResponse, requireRequestRole } from "@/lib/auth/session";
 import { runtimeSessionDeps as authDeps } from "@/lib/auth/runtime";
 import { listFormAgents, getOrCreateConversation, enqueueOutbox } from "@/lib/db";
+import { getWarmupPhase, isBroadcastBlocked } from "@/lib/warmup-throttle";
 
 const FORM_URL =
 	"https://docs.google.com/forms/d/e/1FAIpQLSfAhKXTXOHL6ftaFhaXjy8QTRLxBgVM4MY885iA74-PQdB0qw/viewform";
@@ -22,6 +24,13 @@ export async function POST(req: Request) {
 	try {
 		await requireRequestRole(req, authDeps, "manager");
 
+		if (isBroadcastBlocked(await getWarmupPhase())) {
+			return NextResponse.json(
+				{ ok: false, error: "El número está en período de calentamiento tras un relogin reciente. Reintentá más tarde." },
+				{ status: 400 },
+			);
+		}
+
 		const body = await req.json().catch(() => ({})) as { phone?: string };
 		const testPhone = body.phone?.replace(/\D/g, "") || null;
 
@@ -37,11 +46,14 @@ export async function POST(req: Request) {
 			);
 		}
 
+		const batchId = randomUUID();
 		const queued: string[] = [];
 		for (const agent of targets) {
 			const jid = `${agent.phone}@s.whatsapp.net`;
 			const conversation = await getOrCreateConversation(agent.phone, jid, agent.name);
-			await enqueueOutbox(conversation.id, agent.phone, buildFormMessage(agent.name));
+			await enqueueOutbox(conversation.id, agent.phone, buildFormMessage(agent.name), {
+				broadcast_batch_id: batchId,
+			});
 			queued.push(agent.phone);
 		}
 

@@ -1,8 +1,8 @@
 import "./env-loader.ts";
 import { Redis } from "ioredis";
-import { waitBetweenSends } from "../src/lib/send-pacing.ts";
 import { msUntilNextTopOfHour } from "../src/lib/colombia-schedule.ts";
 import { listFormAgents } from "../src/lib/db.ts";
+import { getWarmupPhase, isBroadcastBlocked } from "../src/lib/warmup-throttle.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
@@ -30,7 +30,7 @@ function buildMessage(name: string): string {
 }
 
 export async function runFormBroadcastOnce(): Promise<
-	"sent" | "skipped" | "not_ready" | "outside_window" | "error"
+	"sent" | "skipped" | "not_ready" | "outside_window" | "warmup_blocked" | "error"
 > {
 	try {
 		const now = colombiaDateNow();
@@ -48,7 +48,7 @@ export async function runFormBroadcastOnce(): Promise<
 		const key = cooldownKey(year, month, (sendIndex + 1) as 1 | 2);
 		if (await redisClient.get(key)) return "skipped";
 
-		const { globalSock } = await import("../src/lib/baileys/client.ts");
+		const { globalSock, sendViaGlobalSock } = await import("../src/lib/baileys/client.ts");
 		if (!globalSock?.user?.id) {
 			console.warn("[form-broadcast] Socket todavía no autenticado, reintento en breve.");
 			return "not_ready";
@@ -60,15 +60,21 @@ export async function runFormBroadcastOnce(): Promise<
 			return "skipped";
 		}
 
+		if (isBroadcastBlocked(await getWarmupPhase())) {
+			// No se marca el cooldown: se reintenta en el próximo tick dentro de la ventana
+			// (o el día 2/7 siguiente) una vez pasado el período de calentamiento.
+			console.warn("[form-broadcast] Número en período de calentamiento post-relogin, se pospone el envío.");
+			return "warmup_blocked";
+		}
+
 		// Marcar antes del loop para que un reinicio a mitad no duplique el envío
 		await redisClient.set(key, Date.now().toString(), "EX", 60 * 60 * 24 * 5);
 		console.log(`[form-broadcast] Enviando formulario a ${agents.length} agentes (envío ${sendIndex + 1}/2 del mes ${year}-${String(month).padStart(2, "0")})...`);
 
-		for (const [index, agent] of agents.entries()) {
-			if (index > 0) await waitBetweenSends();
+		for (const agent of agents) {
 			const jid = `${agent.phone}@s.whatsapp.net`;
 			try {
-				await globalSock.sendMessage(jid, { text: buildMessage(agent.name) });
+				await sendViaGlobalSock(jid, { text: buildMessage(agent.name) }, { kind: "broadcast" });
 				console.log(`[form-broadcast] Enviado a ${agent.name} (${agent.phone})`);
 			} catch (err) {
 				console.error(`[form-broadcast] Falló el envío a ${agent.name} (${agent.phone}):`, err);

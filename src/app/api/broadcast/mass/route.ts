@@ -3,10 +3,13 @@ import { NextResponse } from "next/server";
 import { authErrorToResponse, requireRequestRole } from "@/lib/auth/session";
 import { runtimeSessionDeps as authDeps } from "@/lib/auth/runtime";
 import { listAgentsMaster, getConversationByPhone, getOrCreateConversation, enqueueOutbox } from "@/lib/db";
+import { getWarmupPhase, isBroadcastBlocked } from "@/lib/warmup-throttle";
 
-const MIN_DELAY_S = 15;
+// Mínimos más conservadores que el pacing base de la cola: un broadcast idéntico a toda la
+// planta de agentes es, aislado del resto de medidas anti-baneo, el patrón de mayor riesgo.
+const MIN_DELAY_S = 45;
 const MAX_DELAY_S = 600;
-const DEFAULT_DELAY_S = 60;
+const DEFAULT_DELAY_S = 90;
 
 /**
  * POST /api/broadcast/mass
@@ -16,6 +19,13 @@ const DEFAULT_DELAY_S = 60;
 export async function POST(req: Request) {
 	try {
 		await requireRequestRole(req, authDeps, "manager");
+
+		if (isBroadcastBlocked(await getWarmupPhase())) {
+			return NextResponse.json(
+				{ error: "El número está en período de calentamiento tras un relogin reciente. Reintentá más tarde." },
+				{ status: 400 },
+			);
+		}
 
 		const body = await req.json().catch(() => ({})) as { message?: string; selectedPhones?: string[]; delaySecs?: number };
 		const message = body.message?.trim();

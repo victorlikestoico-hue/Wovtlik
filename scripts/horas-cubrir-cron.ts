@@ -154,7 +154,7 @@ export async function runHorasCubrirCronOnce(): Promise<"sent" | "skipped" | "em
 		const alreadySent = await redisClient.get(HORAS_CUBRIR_COOLDOWN_KEY);
 		if (alreadySent) return "skipped";
 
-		const { globalSock } = await import("../src/lib/baileys/client.ts");
+		const { globalSock, sendViaGlobalSock } = await import("../src/lib/baileys/client.ts");
 		// sock.user.id solo existe una vez que la conexión terminó de autenticarse;
 		// globalSock por sí solo ya existe apenas se crea el socket, antes de eso.
 		if (!globalSock?.user?.id) {
@@ -187,7 +187,7 @@ export async function runHorasCubrirCronOnce(): Promise<"sent" | "skipped" | "em
 			: buildReminderPrompt(entries, todayUY);
 		const message = await generateCreativeText(prompt, settings);
 
-		await globalSock.sendMessage(ANUNCIOS_HORAS_GROUP_JID, { text: message });
+		await sendViaGlobalSock(ANUNCIOS_HORAS_GROUP_JID, { text: message }, { kind: "cron" });
 		await redisClient.set(HORAS_CUBRIR_COOLDOWN_KEY, Date.now().toString(), "EX", HORAS_CUBRIR_COOLDOWN_SECONDS);
 		if (isFirstOfDay) {
 			await redisClient.set(HORAS_CUBRIR_FULL_SENT_DATE_KEY, todayCO, "EX", HORAS_CUBRIR_FULL_SENT_TTL_SECONDS);

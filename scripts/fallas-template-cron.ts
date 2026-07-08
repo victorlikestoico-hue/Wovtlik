@@ -35,7 +35,7 @@ export async function runFallasTemplateCronOnce(): Promise<"sent" | "skipped" | 
 		const alreadySent = await redisClient.get(FALLAS_TEMPLATE_COOLDOWN_KEY);
 		if (alreadySent) return "skipped";
 
-		const { globalSock, FALLAS_GROUP_JID } = await import("../src/lib/baileys/client.ts");
+		const { globalSock, FALLAS_GROUP_JID, sendViaGlobalSock } = await import("../src/lib/baileys/client.ts");
 		// sock.user.id solo existe una vez que la conexión terminó de autenticarse;
 		// globalSock por sí solo ya existe apenas se crea el socket, antes de eso.
 		if (!globalSock?.user?.id) {
@@ -43,7 +43,7 @@ export async function runFallasTemplateCronOnce(): Promise<"sent" | "skipped" | 
 			return "not_ready";
 		}
 
-		await globalSock.sendMessage(FALLAS_GROUP_JID, { text: FALLAS_TEMPLATE_MESSAGE });
+		await sendViaGlobalSock(FALLAS_GROUP_JID, { text: FALLAS_TEMPLATE_MESSAGE }, { kind: "cron" });
 		await redisClient.set(FALLAS_TEMPLATE_COOLDOWN_KEY, Date.now().toString(), "EX", FALLAS_TEMPLATE_COOLDOWN_SECONDS);
 		return "sent";
 	} catch (err) {

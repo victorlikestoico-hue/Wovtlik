@@ -17,7 +17,6 @@ import {
 	getRecentHistory,
 } from "../src/lib/db.ts";
 import { Redis } from "ioredis";
-import { waitBetweenSends } from "../src/lib/send-pacing.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 const turnState = createIoredisTurnState(redisClient);
@@ -53,11 +52,11 @@ const scheduler = createFollowUpScheduler({
 		return { ok: true, parsed: res.parsed };
 	},
 	sendWhatsAppMessage: async (jid, text) => {
-		const { globalSock } = await import("../src/lib/baileys/client.ts");
+		const { globalSock, sendViaGlobalSock } = await import("../src/lib/baileys/client.ts");
 		// sock.user.id solo existe una vez autenticado; globalSock ya existe antes de eso
 		// y llamar sendMessage en ese punto rompe dentro de Baileys (authState.creds.me undefined).
 		if (globalSock?.user?.id) {
-			await globalSock.sendMessage(jid, { text });
+			await sendViaGlobalSock(jid, { text }, { kind: "reactive" });
 		} else {
 			throw new Error("[scheduler] WhatsApp socket todavía no autenticado.");
 		}
@@ -70,7 +69,8 @@ const scheduler = createFollowUpScheduler({
 		});
 	},
 	generateToken: () => Math.random().toString(36).substring(2, 15),
-	waitBetweenSends,
+	// El pacing entre followups de una misma corrida ahora lo da la cola global de envío
+	// (sendViaGlobalSock); no hace falta pacear localmente antes de cada processCandidate.
 });
 
 export async function runFollowupSchedulerOnce() {

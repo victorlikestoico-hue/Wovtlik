@@ -5,6 +5,7 @@ import {
 	fetchLatestBaileysVersion,
 	Browsers,
 	downloadMediaMessage,
+	type AnyMessageContent,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import fs from "node:fs";
@@ -61,7 +62,13 @@ import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffli
 import { createCalendarEvent } from "../google-calendar-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
-import { waitBetweenSends } from "../send-pacing.ts";
+import { type SendKind } from "../send-pacing.ts";
+import { enqueueSocketSend, getQueuedSendCount, setSendDelayMultiplierProvider } from "../send-queue.ts";
+import { markSessionLinked, getWarmupPhase, warmupDelayMultiplier } from "../warmup-throttle.ts";
+
+// El pacing entre envíos se alarga automáticamente durante el período de calentamiento
+// posterior a cualquier relogin con sesión nueva (ver warmup-throttle.ts).
+setSendDelayMultiplierProvider(async () => warmupDelayMultiplier(await getWarmupPhase()));
 
 const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
 const authDir = runtimePaths.authDir;
@@ -1252,6 +1259,17 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 // no se pudo interpretar (falta el correo), el reporte se ignora silenciosamente — solo queda
 // registrado en Telegram/DB para revisión manual. Si se pudo procesar, la única señal de vuelta
 // es una reacción ✅ sobre el último mensaje del agente (sin texto).
+
+// Envía un texto en el grupo de fallas simulando presencia humana ("escribiendo..." antes,
+// "pausado" después) — a diferencia de las reacciones ✅ (que sí pueden ser instantáneas,
+// reaccionar rápido a un mensaje es un patrón humano normal), un texto que llega sin ningún
+// delay ni indicador de "escribiendo" es una señal de latencia sub-humana.
+async function sendGroupTextWithPresence(jid: string, text: string): Promise<void> {
+	await globalSock?.sendPresenceUpdate("composing", jid).catch(() => {});
+	await sendViaGlobalSock(jid, { text }, { kind: "reactive" });
+	await globalSock?.sendPresenceUpdate("paused", jid).catch(() => {});
+}
+
 async function processFallasGroupReport(phone: string, senderName: string, lastMsgKey?: any): Promise<void> {
 	const debounceKey = fallasGroupDebounceKey(phone);
 	const raw = await redisClient.get(debounceKey);
@@ -1300,9 +1318,11 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 		const queued = await queueAgentOffline(email, queueReason, spreadsheetId);
 		await markGroupFailureReportConfirmed(reportId, queued);
 		if (queued && lastMsgKey) {
-			await globalSock.sendMessage(lastMsgKey.remoteJid as string, {
-				react: { text: "✅", key: lastMsgKey },
-			});
+			await sendViaGlobalSock(
+				lastMsgKey.remoteJid as string,
+				{ react: { text: "✅", key: lastMsgKey } },
+				{ kind: "reactive" },
+			);
 		}
 	} catch (err) {
 		console.error("[fallas-group] Error procesando offline directo:", err);
@@ -1364,9 +1384,10 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 
 	if (!isInCurrentWeekAR(targetDate)) {
 		try {
-			await globalSock.sendMessage(lastMsgKey?.remoteJid as string, {
-				text: "⚠️ Solo puedo corregir ausencias de la semana actual acá. Para semanas anteriores completá el formulario:\nhttps://docs.google.com/forms/d/e/1FAIpQLSeQchP9yHLO7s2w48k0SN3dS-p-ibVzkw9MQJIDLIrsww8LHQ/viewform",
-			});
+			await sendGroupTextWithPresence(
+				lastMsgKey?.remoteJid as string,
+				"⚠️ Solo puedo corregir ausencias de la semana actual acá. Para semanas anteriores completá el formulario:\nhttps://docs.google.com/forms/d/e/1FAIpQLSeQchP9yHLO7s2w48k0SN3dS-p-ibVzkw9MQJIDLIrsww8LHQ/viewform",
+			);
 		} catch (err) {
 			console.error("[fallas-group] Error avisando fuera de semana actual:", err);
 		}
@@ -1379,20 +1400,24 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 			if (logSheetId) await logAbsenceRemoval(logSheetId, email, result.fecha, result.horario, motivo);
 			await markGroupFailureReportConfirmed(reportId, true);
 			if (lastMsgKey) {
-				await globalSock.sendMessage(lastMsgKey.remoteJid as string, {
-					react: { text: "✅", key: lastMsgKey },
-				});
+				await sendViaGlobalSock(
+					lastMsgKey.remoteJid as string,
+					{ react: { text: "✅", key: lastMsgKey } },
+					{ kind: "reactive" },
+				);
 			}
 		} else if (result.reason === "not_found") {
 			await markGroupFailureReportConfirmed(reportId, false);
-			await globalSock.sendMessage(lastMsgKey?.remoteJid as string, {
-				text: `No encontré una ausencia registrada para vos el ${targetDate.split("-").reverse().join("/")}. Si creés que es un error, contactá al TL.`,
-			});
+			await sendGroupTextWithPresence(
+				lastMsgKey?.remoteJid as string,
+				`No encontré una ausencia registrada para vos el ${targetDate.split("-").reverse().join("/")}. Si creés que es un error, contactá al TL.`,
+			);
 		} else if (result.reason === "ctt_ceded") {
 			await markGroupFailureReportConfirmed(reportId, false);
-			await globalSock.sendMessage(lastMsgKey?.remoteJid as string, {
-				text: "⚠️ Esa ausencia no se puede corregir: figura como turno cedido (CTT). Si creés que es un error, contactá al TL.",
-			});
+			await sendGroupTextWithPresence(
+				lastMsgKey?.remoteJid as string,
+				"⚠️ Esa ausencia no se puede corregir: figura como turno cedido (CTT). Si creés que es un error, contactá al TL.",
+			);
 		}
 	} catch (err) {
 		console.error("[fallas-group] Error procesando corrección de ausencia:", err);
@@ -1452,7 +1477,7 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 					: mentionedOtherLob
 					? "Entrá acá 👇\nhttps://script.google.com/a/macros/pedidosya.com/s/AKfycby0mvlKtQACyQyd7-tTWIUN-jAWV-L95ei0rhMCzyPzCRPzwWN3NWyGCtsa2fd4oRO6/exec\n\nBuscá la pestaña 📋 *TL Activo*"
 					: "¿TL de qué LOB necesitás? 🤔";
-				await globalSock.sendMessage(msg.key.remoteJid as string, { text: replyText });
+				await sendGroupTextWithPresence(msg.key.remoteJid as string, replyText);
 			} catch (err) {
 				console.error("[fallas-group] Error respondiendo consulta de TL en turno:", err);
 			}
@@ -1472,9 +1497,10 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 		text = text.replace(embeddedPartialEmail, fullEmail);
 		if (globalSock && isSocketConnected) {
 			try {
-				await globalSock.sendMessage(msg.key.remoteJid as string, {
-					text: `Anoté tu correo como *${fullEmail}*. La próxima vez mandalo completo, con @dominio.`,
-				});
+				await sendGroupTextWithPresence(
+					msg.key.remoteJid as string,
+					`Anoté tu correo como *${fullEmail}*. La próxima vez mandalo completo, con @dominio.`,
+				);
 			} catch (err) {
 				console.error("[fallas-group] Error respondiendo recordatorio de correo completo:", err);
 			}
@@ -1738,29 +1764,23 @@ let profilePicInterval: NodeJS.Timeout | null = null;
 let disconnectionAlertTimer: NodeJS.Timeout | null = null;
 const DISCONNECTION_ALERT_MINUTES = 10;
 
-// Cola global de envíos salientes de respuestas reactivas (IA -> agentes).
-// Sin esto, si varios agentes escriben casi al mismo tiempo, el bot les contesta
-// a todos en paralelo: ese patrón (un número respondiendo automáticamente a muchos
-// contactos distintos a la vez) es la señal de bot/spam más fuerte para WhatsApp.
-// Serializamos los envíos y los espaciamos con el mismo pacing que usan los crons.
-let sendChainPromise: Promise<void> = Promise.resolve();
-let queuedSendCount = 0;
+export { enqueueSocketSend, getQueuedSendCount };
 
-function enqueueSocketSend<T>(task: () => Promise<T>): Promise<T> {
-	queuedSendCount++;
-	const shouldWait = queuedSendCount > 1;
-	const chained = sendChainPromise.then(async () => {
-		if (shouldWait) await waitBetweenSends();
-		return task();
-	});
-	sendChainPromise = chained.then(
-		() => undefined,
-		() => undefined,
-	);
-	chained.finally(() => {
-		queuedSendCount--;
-	});
-	return chained;
+// Único punto de contacto real con globalSock.sendMessage. Todo envío saliente (respuestas
+// reactivas de IA, outbox, crons, grupo de fallas) debe pasar por acá para quedar serializado
+// y paceado por la cola global — nunca llamar a globalSock.sendMessage directamente en otro lado.
+export async function sendViaGlobalSock(
+	jid: string,
+	content: AnyMessageContent,
+	opts?: { kind?: SendKind },
+): Promise<void> {
+	await enqueueSocketSend(async () => {
+		if (globalSock && isSocketConnected) {
+			await globalSock.sendMessage(jid, content);
+		} else {
+			throw new Error("[bot] Socket no conectado o no listo. No se puede enviar mensaje.");
+		}
+	}, opts);
 }
 
 // Creamos el Inbound Handler inyectando las dependencias necesarias
@@ -2005,13 +2025,7 @@ export const inboundHandler = createInboundHandler({
 		});
 	},
 	sendMessage: async (jid, text) => {
-		await enqueueSocketSend(async () => {
-			if (globalSock && isSocketConnected) {
-				await globalSock.sendMessage(jid, { text });
-			} else {
-				throw new Error("[bot] Socket no conectado o no listo. No se puede enviar mensaje.");
-			}
-		});
+		await sendViaGlobalSock(jid, { text }, { kind: "reactive" });
 	},
 	notifyTelegramHumanNeeded: async (payload) => {
 		await notifyTelegramHumanNeeded({
@@ -2117,8 +2131,7 @@ function startOutboxProcessor() {
 		isProcessingOutbox = true;
 		try {
 			const pending = await getPendingOutbox(20);
-			for (const [index, item] of pending.entries()) {
-				if (index > 0) await waitBetweenSends();
+			for (const item of pending) {
 				const jid = outboxDestinationForConversation({
 					phone: item.conversation_phone ?? item.phone,
 					jid: item.conversation_jid ?? null,
@@ -2127,7 +2140,9 @@ function startOutboxProcessor() {
 					`[bot] Enviando ${item.media_type ?? "text"} de Outbox a ${jid}: "${item.content.substring(0, 30)}..."`,
 				);
 				try {
-					await globalSock.sendMessage(jid, outboxSendPayload(item));
+					await sendViaGlobalSock(jid, outboxSendPayload(item), {
+						kind: item.broadcast_batch_id ? "broadcast" : "cron",
+					});
 					await markOutboxSent(item.id);
 					outboxAttempts.delete(item.id);
 					console.log(`[bot] Mensaje de Outbox id ${item.id} enviado exitosamente.`);
@@ -2201,6 +2216,10 @@ async function refreshAllProfilePictures() {
 export async function startWASocket() {
 	const activeInstance = await getActiveWhatsAppInstance();
 	const instanceAuthDir = getInstanceAuthDir(activeInstance.id);
+	// Si no había credenciales previas, esta conexión va a requerir un QR nuevo — es el momento
+	// de mayor riesgo de baneo (ver warmup-throttle.ts). Se detecta antes de que
+	// getMultiFileAuthState() cree el archivo, y se usa al abrir la conexión más abajo.
+	const isFreshLogin = !fs.existsSync(path.join(instanceAuthDir, "creds.json"));
 	if (!fs.existsSync(instanceAuthDir)) {
 		fs.mkdirSync(instanceAuthDir, { recursive: true });
 	}
@@ -2303,6 +2322,12 @@ export async function startWASocket() {
 				disconnectionAlertTimer = null;
 			}
 			console.log("[bot] Conexión abierta con éxito.");
+			if (isFreshLogin) {
+				await markSessionLinked().catch((err) =>
+					console.error("[bot] No se pudo registrar session_linked_at:", err),
+				);
+				console.log("[bot] Sesión nueva detectada — entrando en período de calentamiento post-relogin.");
+			}
 			const rawId = sock.user?.id || "";
 			const selfName = typeof sock.user?.name === "string" ? sock.user.name.trim() : "";
 			const numericPhone = rawId.split(":")[0] || rawId.split("@")[0] || "";
