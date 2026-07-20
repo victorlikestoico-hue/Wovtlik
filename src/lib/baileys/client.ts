@@ -457,7 +457,9 @@ const pendingAppointmentDataKey = (phone: string) => `bot:pending_appointment:${
 function matchesAbsenceIntent(msgLower: string): boolean {
 	if (ABSENCE_KEYWORDS.some((kw) => msgLower.includes(kw))) return true;
 	const hasAbsenceNoun = /\b(ausenci[ao]|ausente|faltas?)\b/.test(msgLower);
-	const hasRemovalVerb = /\b(elimin[a-záéíóúñü]{0,6}|quit[a-záéíóúñü]{0,6}|borr[a-záéíóúñü]{0,6}|sac[a-záéíóúñü]{0,6}|remov[a-záéíóúñü]{0,6})\b/.test(msgLower);
+	// corregir es irregular (corrijo/corrigen/corregir) — corri[jg] cubre las formas con
+	// raíz cambiada y correg cubre el infinitivo y las formas regulares (corregir, corregí).
+	const hasRemovalVerb = /\b(elimin[a-záéíóúñü]{0,6}|quit[a-záéíóúñü]{0,6}|borr[a-záéíóúñü]{0,6}|sac[a-záéíóúñü]{0,6}|remov[a-záéíóúñü]{0,6}|corri[jg][a-záéíóúñü]{0,6}|correg[a-záéíóúñü]{0,6})\b/.test(msgLower);
 	return hasAbsenceNoun && hasRemovalVerb;
 }
 
@@ -497,9 +499,21 @@ function buildMenuReply(firstName?: string): string {
 	);
 }
 
+// "Termino mi turno y tengo cola/casos pendientes, reasignen" — no es una falla técnica sino
+// fin de turno con chats activos sin cerrar. Se resuelve con el mismo mecanismo de "Fuera de
+// línea" (reasigna los chats vía el Monitor), solo cambia el motivo. Se exigen las dos señales
+// combinadas para no confundir con un simple "ya termino mi turno" de saludo/aviso sin pedir nada.
+const SHIFT_END_PATTERN = /\btermin[oóaeí]{0,3}\s+(el\s+|mi\s+)?turno\b/;
+const PENDING_CASES_PATTERN = /reasign|tengo cola|casos pendientes|tengo casos|gestionando casos/;
+
+function isEndOfShiftReassignRequest(msgLower: string): boolean {
+	return SHIFT_END_PATTERN.test(msgLower) && PENDING_CASES_PATTERN.test(msgLower);
+}
+
 /** Clasifica el tipo de falla a partir del texto libre del agente. */
 function classifyFailureReason(text: string): string {
 	const lower = text.toLowerCase();
+	if (isEndOfShiftReassignRequest(lower)) return "Fin de turno con casos pendientes de reasignar";
 	if (lower.includes("luz") || lower.includes("energ") || lower.includes("corriente")
 		|| lower.includes("apag") || lower.includes("electric")) return "Falla de luz / energía eléctrica";
 	if (/\bpc\b/.test(lower) || lower.includes("computador") || lower.includes("equipo")
@@ -1551,7 +1565,7 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// un reporte en curso para este agente, cualquier mensaje suyo se suma (correo, LOB,
 	// "ayuda", etc.) aunque no repita la palabra clave — así no se pierde info repartida
 	// en varios mensajes seguidos.
-	const hasFailureKeyword = OFFLINE_KEYWORDS.some((kw) => lower.includes(kw));
+	const hasFailureKeyword = OFFLINE_KEYWORDS.some((kw) => lower.includes(kw)) || isEndOfShiftReassignRequest(lower);
 	const hasActiveReport = fallasGroupTimers.has(phone);
 	// En este grupo dedicado a reportes de fallas, señales simples (internet, luz, HC) son
 	// suficientes para disparar el proceso — el contexto del grupo ya garantiza que es un reporte.
@@ -1890,7 +1904,7 @@ export const inboundHandler = createInboundHandler({
 				// Also catches multi-turn follow-up where user provides the reason after the bot asked
 				const pendingOffline = conv ? await redisClient.get(pendingIntentKey(conv.phone)) : null;
 				const isOfflineReasonFollowUp = pendingOffline === "offline_reason";
-				if ((OFFLINE_KEYWORDS.some((kw) => msgLower.includes(kw)) || isOfflineReasonFollowUp) && conv) {
+				if ((OFFLINE_KEYWORDS.some((kw) => msgLower.includes(kw)) || isEndOfShiftReassignRequest(msgLower) || isOfflineReasonFollowUp) && conv) {
 					const reply = await tryGoOfflineReply(conv.phone, lastUserMsg);
 					if (reply) return reply;
 				}
