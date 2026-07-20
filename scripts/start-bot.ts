@@ -9,7 +9,6 @@ import {
 import { startFollowupsCron } from "./followups-cron.ts";
 import { startDashBigReportsCron } from "./dashbig-reports-cron.ts";
 import { startAppointmentsCron } from "./appointments-cron.ts";
-import { startOfflineResultsCron } from "./offline-results-cron.ts";
 import { startFallasTemplateCron } from "./fallas-template-cron.ts";
 import { startHorasCubrirCron } from "./horas-cubrir-cron.ts";
 import { startFormBroadcastCron } from "./form-broadcast-cron.ts";
@@ -31,10 +30,6 @@ async function main() {
 
 	// Recordatorios de citas agendadas (cliente, agente y Telegram)
 	startAppointmentsCron();
-
-	// Avisa al agente cuando el Monitor procesa su solicitud de Fuera de línea
-	// (si se aplicó o no, y cuántos chats se reasignaron)
-	startOfflineResultsCron();
 
 	// Recordatorio cada 2hs en el grupo de fallas de qué datos enviar (correo, motivo, formulario)
 	startFallasTemplateCron();

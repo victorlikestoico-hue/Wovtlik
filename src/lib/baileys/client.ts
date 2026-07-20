@@ -1913,7 +1913,8 @@ export const inboundHandler = createInboundHandler({
 					return buildMenuReply(firstName);
 				}
 
-				// Saludo → bienvenida para nuevos, menú para registrados
+				// Saludo → bienvenida para nuevos; para registrados se deja pasar a la IA
+				// (el menú de opciones ya no se manda automático, solo si lo piden explícitamente arriba)
 				if (conv && GREETING_KEYWORDS.some((kw) =>
 					msgLower === kw || msgLower.startsWith(`${kw} `) ||
 					msgLower.startsWith(`${kw}!`) || msgLower.startsWith(`${kw},`)
@@ -1925,8 +1926,6 @@ export const inboundHandler = createInboundHandler({
 							"Puedo ayudarte con métricas 📊, turnos 📅, ausencias ✏️, cambio de estado 🔴 y horas extra ⏰.",
 							"Para activar estas funciones respondé con tu email corporativo, ej: \"luis@pedidosya.com\"",
 						);
-					} else {
-						return buildMenuReply(deriveFirstNameFromEmail(agentProfile.email));
 					}
 				}
 
