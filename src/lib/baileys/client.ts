@@ -420,11 +420,25 @@ function isResolvedReportMessage(text: string): boolean {
 // de un agente real reportando algo — ni tampoco procesarse como un reporte en sí.
 const TEMPLATE_EXAMPLE_EMAIL = "victor.garces_ndo.ext@pedidosya.com";
 
-/** true si el texto es (o incluye) la plantilla informativa de "cómo reportar una falla", reenviada como recordatorio. */
+/**
+ * true si el texto es (o incluye) la plantilla informativa de "cómo reportar una falla",
+ * reenviada como recordatorio puro — sin datos reales cargados encima.
+ *
+ * Algunos agentes copian la plantilla entera y solo reemplazan el correo de ejemplo por el
+ * suyo real (dejando el resto de la redacción/encabezado igual). Eso SÍ es un reporte real,
+ * no debe ignorarse — por eso, si aparece un correo (completo o parcial) distinto al de
+ * ejemplo, se considera que el agente cargó su reporte sobre la plantilla y se procesa.
+ */
 function isReportTemplateMessage(text: string): boolean {
 	const lower = text.toLowerCase();
-	return lower.includes("cómo reportar una falla") || lower.includes("como reportar una falla")
-		|| lower.includes(TEMPLATE_EXAMPLE_EMAIL);
+	const hasHeader = lower.includes("cómo reportar una falla") || lower.includes("como reportar una falla");
+	const hasTemplateExampleEmail = lower.includes(TEMPLATE_EXAMPLE_EMAIL);
+	if (!hasHeader && !hasTemplateExampleEmail) return false;
+
+	const emailMatch = text.match(EMAIL_REGEX);
+	const hasRealFullEmail = emailMatch !== null && emailMatch[0].toLowerCase() !== TEMPLATE_EXAMPLE_EMAIL;
+	const hasRealPartialEmail = emailMatch === null && findEmbeddedPartialEmailToken(text) !== null;
+	return !hasRealFullEmail && !hasRealPartialEmail;
 }
 
 // Pending intent system: when any handler finds no profile it saves the intent
@@ -1503,22 +1517,12 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// (ej. "correo: victor.garces, se cayó el internet"). Se completa con el sufijo real
 	// de los correos de la empresa (ej. "victor.garces_ndo.ext@pedidosya.com") y se sigue
 	// procesando con ese correo armado — no hace falta que el agente vuelva a escribir nada
-	// para que la desconexión se registre en el sheet. Igual se le avisa que la próxima vez
-	// lo mande completo.
+	// para que la desconexión se registre en el sheet. La corrección es silenciosa: no se
+	// le avisa nada en el grupo de fallas/desconexiones.
 	const embeddedPartialEmail = !EMAIL_REGEX.test(text) ? findEmbeddedPartialEmailToken(text) : null;
 	if (embeddedPartialEmail) {
 		const fullEmail = buildFullCorporateEmail(embeddedPartialEmail);
 		text = text.replace(embeddedPartialEmail, fullEmail);
-		if (globalSock && isSocketConnected) {
-			try {
-				await sendGroupTextWithPresence(
-					msg.key.remoteJid as string,
-					`Anoté tu correo como *${fullEmail}*. La próxima vez mandalo completo, con @dominio.`,
-				);
-			} catch (err) {
-				console.error("[fallas-group] Error respondiendo recordatorio de correo completo:", err);
-			}
-		}
 	}
 
 	if (isResolvedReportMessage(text)) {
@@ -1608,7 +1612,11 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 async function tryRegisterEmailReply(phone: string, message: string): Promise<string | null> {
 	const emailMatch = message.match(EMAIL_REGEX);
 	if (!emailMatch) return null;
-	const email = emailMatch[0].toLowerCase();
+	// El dominio/sufijo que haya puesto el agente se descarta siempre: todos los correos
+	// corporativos son nombre.apellido_ndo.ext@pedidosya.com, así que reconstruimos a partir
+	// del local-part sin importar qué dominio (gmail.com, @pedidosya.com sin sufijo, etc.) haya escrito.
+	const rawLocalPart = emailMatch[0].toLowerCase().split("@")[0];
+	const email = buildFullCorporateEmail(rawLocalPart);
 
 	// Verificar si este teléfono ya tiene un email vinculado
 	const existing = await getAgentProfile(phone);
