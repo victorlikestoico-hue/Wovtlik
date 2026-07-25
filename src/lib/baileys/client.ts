@@ -1309,7 +1309,10 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 	if (!reason) return; // sin motivo no hay nada que procesar
 
 	const emailMatch = reason.match(EMAIL_REGEX);
-	const matchedEmail = emailMatch ? emailMatch[0].toLowerCase() : undefined;
+	// El dominio/sufijo que haya puesto el agente se descarta siempre y se reconstruye con
+	// buildFullCorporateEmail — igual que en tryRegisterEmailReply — para no grabar en la
+	// planilla un typo de dominio (ej. "pedidisya.com") tal cual lo escribió el agente.
+	const matchedEmail = emailMatch ? buildFullCorporateEmail(emailMatch[0].toLowerCase().split("@")[0]) : undefined;
 	const profile = await getAgentProfile(phone);
 	// Si el número ya está registrado, su correo verificado manda siempre — un correo
 	// suelto en el texto (typo, el de un compañero, etc.) nunca debe pisarlo. El correo de
@@ -1374,7 +1377,9 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 	if (!motivo) return;
 
 	const emailMatch = motivo.match(EMAIL_REGEX);
-	const matchedEmail = emailMatch ? emailMatch[0].toLowerCase() : undefined;
+	// Mismo criterio que processFallasGroupReport: se descarta el dominio/sufijo escrito por
+	// el agente y se reconstruye siempre con buildFullCorporateEmail.
+	const matchedEmail = emailMatch ? buildFullCorporateEmail(emailMatch[0].toLowerCase().split("@")[0]) : undefined;
 	const profile = await getAgentProfile(phone);
 	// El correo de ejemplo de la plantilla nunca cuenta como correo real.
 	const email = profile?.email || (matchedEmail && matchedEmail !== TEMPLATE_EXAMPLE_EMAIL ? matchedEmail : undefined);
