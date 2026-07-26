@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type MetaReminderSentRow = {
 	id: number;
@@ -51,14 +51,17 @@ export default function MetaPanel() {
 	const [replies, setReplies] = useState<MetaReplyRow[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [filterDate, setFilterDate] = useState("");
+	const [filterHora, setFilterHora] = useState("");
 
-	const load = useCallback(async () => {
+	const load = useCallback(async (date: string) => {
 		setLoading(true);
 		setError(null);
 		try {
+			const qs = date ? `?date=${encodeURIComponent(date)}` : "";
 			const [remindersRes, repliesRes] = await Promise.all([
-				fetch("/api/meta/reminders", { cache: "no-store" }),
-				fetch("/api/meta/replies", { cache: "no-store" }),
+				fetch(`/api/meta/reminders${qs}`, { cache: "no-store" }),
+				fetch(`/api/meta/replies${qs}`, { cache: "no-store" }),
 			]);
 			if (!remindersRes.ok) throw new Error(`HTTP ${remindersRes.status} (recordatorios)`);
 			if (!repliesRes.ok) throw new Error(`HTTP ${repliesRes.status} (respuestas)`);
@@ -74,8 +77,29 @@ export default function MetaPanel() {
 	}, []);
 
 	useEffect(() => {
-		void load();
-	}, [load]);
+		void load(filterDate);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [filterDate]);
+
+	const horaOptions = useMemo(() => {
+		const set = new Set<string>();
+		for (const r of reminders) {
+			if (r.hora_inicio) set.add(r.hora_inicio);
+		}
+		return Array.from(set).sort();
+	}, [reminders]);
+
+	// Si la hora seleccionada ya no existe entre las opciones (cambió la fecha), se limpia.
+	useEffect(() => {
+		if (filterHora && !horaOptions.includes(filterHora)) {
+			setFilterHora("");
+		}
+	}, [horaOptions, filterHora]);
+
+	const filteredReminders = useMemo(
+		() => (filterHora ? reminders.filter((r) => r.hora_inicio === filterHora) : reminders),
+		[reminders, filterHora],
+	);
 
 	return (
 		<div className="flex h-full flex-col gap-6 overflow-auto">
@@ -86,14 +110,52 @@ export default function MetaPanel() {
 						Envíos por WhatsApp Cloud API (proyecto recordatorios-turnos) y respuestas de los agentes.
 					</p>
 				</div>
-				<button
-					type="button"
-					onClick={load}
-					disabled={loading}
-					className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-on-primary disabled:opacity-50"
-				>
-					{loading ? "Cargando…" : "Actualizar"}
-				</button>
+				<div className="flex flex-wrap items-center gap-2">
+					<label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+						Fecha
+						<input
+							type="date"
+							value={filterDate}
+							onChange={(e) => setFilterDate(e.target.value)}
+							className="rounded-md border border-outline-variant/30 bg-surface-container-low px-2 py-1 text-xs text-on-surface"
+						/>
+					</label>
+					<label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+						Hora envío
+						<select
+							value={filterHora}
+							onChange={(e) => setFilterHora(e.target.value)}
+							className="rounded-md border border-outline-variant/30 bg-surface-container-low px-2 py-1 text-xs text-on-surface"
+						>
+							<option value="">Todas</option>
+							{horaOptions.map((h) => (
+								<option key={h} value={h}>
+									{h}
+								</option>
+							))}
+						</select>
+					</label>
+					{(filterDate || filterHora) && (
+						<button
+							type="button"
+							onClick={() => {
+								setFilterDate("");
+								setFilterHora("");
+							}}
+							className="text-xs text-muted-foreground underline underline-offset-2"
+						>
+							Limpiar filtros
+						</button>
+					)}
+					<button
+						type="button"
+						onClick={() => load(filterDate)}
+						disabled={loading}
+						className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-on-primary disabled:opacity-50"
+					>
+						{loading ? "Cargando…" : "Actualizar"}
+					</button>
+				</div>
 			</div>
 
 			{error && (
@@ -104,7 +166,8 @@ export default function MetaPanel() {
 
 			<section className="flex flex-col gap-2">
 				<h3 className="text-sm font-semibold text-on-surface">
-					Recordatorios enviados — últimos {reminders.length}
+					Recordatorios enviados — {filteredReminders.length}
+					{filteredReminders.length !== reminders.length ? ` de ${reminders.length}` : ""}
 				</h3>
 				<div className="overflow-x-auto rounded-xl border border-outline-variant/30 bg-surface-container-low">
 					<table className="w-full text-sm">
@@ -118,7 +181,7 @@ export default function MetaPanel() {
 							</tr>
 						</thead>
 						<tbody>
-							{reminders.map((r) => (
+							{filteredReminders.map((r) => (
 								<tr key={r.id} className="border-b border-outline-variant/10 last:border-0">
 									<td className="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">{fmtDate(r.sent_at)}</td>
 									<td className="px-3 py-2">
@@ -136,10 +199,12 @@ export default function MetaPanel() {
 									</td>
 								</tr>
 							))}
-							{reminders.length === 0 && !loading && (
+							{filteredReminders.length === 0 && !loading && (
 								<tr>
 									<td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">
-										Sin recordatorios registrados todavía.
+										{reminders.length === 0
+											? "Sin recordatorios registrados todavía."
+											: "Sin recordatorios para el filtro seleccionado."}
 									</td>
 								</tr>
 							)}

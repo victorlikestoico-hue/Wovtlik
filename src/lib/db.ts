@@ -1214,8 +1214,20 @@ export async function insertMetaReminderSent(input: {
 	return res.rows[0];
 }
 
-export async function listMetaRemindersSent(limit = 200): Promise<MetaReminderSentRow[]> {
+export async function listMetaRemindersSent(
+	limit = 200,
+	filters?: { date?: string },
+): Promise<MetaReminderSentRow[]> {
 	await ensureSchemaInitialized();
+	if (filters?.date) {
+		const res = await pool.query<MetaReminderSentRow>(
+			`SELECT * FROM meta_reminders_sent
+			 WHERE (sent_at AT TIME ZONE 'America/Bogota')::date = $1::date
+			 ORDER BY sent_at DESC LIMIT $2`,
+			[filters.date, limit],
+		);
+		return res.rows;
+	}
 	const res = await pool.query<MetaReminderSentRow>(
 		"SELECT * FROM meta_reminders_sent ORDER BY sent_at DESC LIMIT $1",
 		[limit],
@@ -1251,8 +1263,20 @@ export async function insertMetaReply(input: {
 	return res.rows[0] ?? null;
 }
 
-export async function listMetaReplies(limit = 200): Promise<MetaReplyRow[]> {
+export async function listMetaReplies(
+	limit = 200,
+	filters?: { date?: string },
+): Promise<MetaReplyRow[]> {
 	await ensureSchemaInitialized();
+	if (filters?.date) {
+		const res = await pool.query<MetaReplyRow>(
+			`SELECT * FROM meta_replies
+			 WHERE (received_at AT TIME ZONE 'America/Bogota')::date = $1::date
+			 ORDER BY received_at DESC LIMIT $2`,
+			[filters.date, limit],
+		);
+		return res.rows;
+	}
 	const res = await pool.query<MetaReplyRow>(
 		"SELECT * FROM meta_replies ORDER BY received_at DESC LIMIT $1",
 		[limit],

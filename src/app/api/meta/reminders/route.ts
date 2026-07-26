@@ -54,7 +54,10 @@ export async function GET(req: Request) {
 	try {
 		await requireRequestRole(req, authDeps, "restricted");
 
-		const reminders = await listMetaRemindersSent(200);
+		const { searchParams } = new URL(req.url);
+		const date = searchParams.get("date") || undefined;
+
+		const reminders = await listMetaRemindersSent(200, date ? { date } : undefined);
 
 		return NextResponse.json({ reminders });
 	} catch (error: any) {

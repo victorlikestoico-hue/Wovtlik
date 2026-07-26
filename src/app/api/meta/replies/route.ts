@@ -8,7 +8,10 @@ export async function GET(req: Request) {
 	try {
 		await requireRequestRole(req, authDeps, "restricted");
 
-		const replies = await listMetaReplies(200);
+		const { searchParams } = new URL(req.url);
+		const date = searchParams.get("date") || undefined;
+
+		const replies = await listMetaReplies(200, date ? { date } : undefined);
 
 		return NextResponse.json({ replies });
 	} catch (error: any) {
