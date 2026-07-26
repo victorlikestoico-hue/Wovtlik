@@ -29,7 +29,7 @@ export type ConversationEventType =
 	| "turn_failed";
 export type EventActorRole = MessageRole | "system";
 export type UserStatus = "active" | "disabled";
-export type TeamMembershipRole = "owner" | "manager" | "agent" | "viewer";
+export type TeamMembershipRole = "owner" | "manager" | "agent" | "viewer" | "restricted";
 export type CrmContactMethodType =
 	| "whatsapp_phone"
 	| "whatsapp_jid"
@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS team_memberships (
   id SERIAL PRIMARY KEY,
   team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT CHECK(role IN ('owner','manager','agent','viewer')) NOT NULL,
+  role TEXT CHECK(role IN ('owner','manager','agent','viewer','restricted')) NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   UNIQUE(team_id, user_id)
 );

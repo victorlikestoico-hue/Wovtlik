@@ -58,6 +58,9 @@ ALTER TABLE crm_tasks ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMP WITH T
 ALTER TABLE crm_tasks DROP CONSTRAINT IF EXISTS crm_tasks_task_type_check;
 ALTER TABLE crm_tasks ADD CONSTRAINT crm_tasks_task_type_check
   CHECK(task_type IN ('call_client','follow_up','evaluate_lead','set_label','custom','appointment'));
+ALTER TABLE team_memberships DROP CONSTRAINT IF EXISTS team_memberships_role_check;
+ALTER TABLE team_memberships ADD CONSTRAINT team_memberships_role_check
+  CHECK(role IN ('owner','manager','agent','viewer','restricted'));
 CREATE INDEX IF NOT EXISTS idx_crm_tasks_appointment_pending
   ON crm_tasks(appointment_at)
   WHERE task_type = 'appointment' AND reminder_sent_at IS NULL;

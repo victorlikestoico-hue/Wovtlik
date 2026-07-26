@@ -6,7 +6,7 @@ import { listMetaReplies } from "@/lib/db";
 
 export async function GET(req: Request) {
 	try {
-		await requireRequestRole(req, authDeps, "viewer");
+		await requireRequestRole(req, authDeps, "restricted");
 
 		const replies = await listMetaReplies(200);
 

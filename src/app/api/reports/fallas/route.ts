@@ -6,7 +6,7 @@ import { listGroupFailureReports, listNearMissIntents } from "@/lib/db";
 
 export async function GET(req: Request) {
 	try {
-		await requireRequestRole(req, authDeps, "viewer");
+		await requireRequestRole(req, authDeps, "restricted");
 
 		const [groupFailureReports, nearMissIntents] = await Promise.all([
 			listGroupFailureReports(100),

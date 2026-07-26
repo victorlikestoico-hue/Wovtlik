@@ -66,6 +66,7 @@ interface SidebarProps {
 	phone?: string | null;
 	botProfile?: SidebarBotProfile | null;
 	onDisconnect?: () => void;
+	restricted?: boolean;
 }
 
 type WhatsAppInstance = {
@@ -241,12 +242,20 @@ function SidebarSection({
 	);
 }
 
+const RESTRICTED_PRIMARY_ITEMS: NavItem[] = primaryItems.filter(
+	(item) => item.type === "tab" && item.value === "meta",
+);
+const RESTRICTED_WORKSPACE_ITEMS: NavItem[] = workspaceItems.filter(
+	(item) => item.type === "tab" && item.value === "fallas",
+);
+
 export default function Sidebar({
 	activeTab,
 	setActiveTab,
 	phone,
 	botProfile,
 	onDisconnect,
+	restricted = false,
 }: SidebarProps) {
 	const [isCollapsed, setIsCollapsed] = useState(true);
 	const [organizationMenuOpen, setOrganizationMenuOpen] = useState(false);
@@ -370,10 +379,10 @@ export default function Sidebar({
 							<div className="mt-[1.5px] flex w-full">
 								<DropdownMenu
 									modal={false}
-									open={organizationMenuOpen}
-									onOpenChange={setOrganizationMenuOpen}
+									open={!restricted && organizationMenuOpen}
+									onOpenChange={restricted ? undefined : setOrganizationMenuOpen}
 								>
-									<DropdownMenuTrigger className="w-full" asChild>
+									<DropdownMenuTrigger className="w-full" asChild disabled={restricted}>
 										<Button variant="ghost" size="sm" className="flex w-fit items-center gap-2 px-2">
 											<Avatar className="size-4 rounded">
 												<AvatarImage src="/logoWOPEN.png" alt="WOpen" />
@@ -385,7 +394,7 @@ export default function Sidebar({
 												{!isCollapsed && (
 													<>
 													<span className="text-sm font-medium">{appLabel}</span>
-														<ChevronsUpDown className="size-4 text-muted-foreground/50" />
+														{!restricted && <ChevronsUpDown className="size-4 text-muted-foreground/50" />}
 													</>
 												)}
 											</motion.span>
@@ -446,43 +455,49 @@ export default function Sidebar({
 								<ScrollArea className="h-16 grow p-2">
 									<div className="flex w-full flex-col gap-2">
 										<SidebarSection
-											items={primaryItems}
+											items={restricted ? RESTRICTED_PRIMARY_ITEMS : primaryItems}
 											activeTab={activeTab}
 											isCollapsed={isCollapsed}
 											setActiveTab={setActiveTab}
 										/>
 										<Separator className="w-full" />
 										<SidebarSection
-											items={workspaceItems}
+											items={restricted ? RESTRICTED_WORKSPACE_ITEMS : workspaceItems}
 											activeTab={activeTab}
 											isCollapsed={isCollapsed}
 											setActiveTab={setActiveTab}
 										/>
-										<Separator className="w-full" />
-										<SidebarSection
-											items={libraryItems}
-											activeTab={activeTab}
-											isCollapsed={isCollapsed}
-											setActiveTab={setActiveTab}
-										/>
+										{!restricted && (
+											<>
+												<Separator className="w-full" />
+												<SidebarSection
+													items={libraryItems}
+													activeTab={activeTab}
+													isCollapsed={isCollapsed}
+													setActiveTab={setActiveTab}
+												/>
+											</>
+										)}
 									</div>
 								</ScrollArea>
 							</div>
 
 							<div className="flex flex-col p-2">
-								<button
-									type="button"
-									onClick={() => setActiveTab("settings")}
-									className={cn(
-										"mt-auto flex h-8 w-full flex-row items-center rounded-md px-2 py-1.5 text-muted-foreground transition hover:bg-muted hover:text-primary",
-										activeTab === "settings" && "bg-muted text-primary",
-									)}
-								>
-									<Settings className="size-4 shrink-0" />
-									<motion.span variants={labelVariants}>
-										{!isCollapsed && <span className="ml-2 text-sm font-medium">Ajustes</span>}
-									</motion.span>
-								</button>
+								{!restricted && (
+									<button
+										type="button"
+										onClick={() => setActiveTab("settings")}
+										className={cn(
+											"mt-auto flex h-8 w-full flex-row items-center rounded-md px-2 py-1.5 text-muted-foreground transition hover:bg-muted hover:text-primary",
+											activeTab === "settings" && "bg-muted text-primary",
+										)}
+									>
+										<Settings className="size-4 shrink-0" />
+										<motion.span variants={labelVariants}>
+											{!isCollapsed && <span className="ml-2 text-sm font-medium">Ajustes</span>}
+										</motion.span>
+									</button>
+								)}
 
 								<DropdownMenu
 									modal={false}
@@ -529,13 +544,15 @@ export default function Sidebar({
 											</div>
 										</div>
 										<DropdownMenuSeparator />
-										<DropdownMenuItem
-											className="flex items-center gap-2"
-											onSelect={() => setActiveTab("settings")}
-										>
-											<UserCircle className="size-4" /> Perfil
-										</DropdownMenuItem>
-										{onDisconnect && (
+										{!restricted && (
+											<DropdownMenuItem
+												className="flex items-center gap-2"
+												onSelect={() => setActiveTab("settings")}
+											>
+												<UserCircle className="size-4" /> Perfil
+											</DropdownMenuItem>
+										)}
+										{!restricted && onDisconnect && (
 											<DropdownMenuItem className="flex items-center gap-2" onSelect={onDisconnect}>
 												<LogOut className="size-4" /> Desconectar WhatsApp
 											</DropdownMenuItem>

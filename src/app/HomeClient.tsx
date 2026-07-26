@@ -1,6 +1,6 @@
 "use client";
 
-import { useReducer, useEffect, useRef, useMemo } from "react";
+import { useReducer, useEffect, useRef, useMemo, useState } from "react";
 import ConnectionGate from "../components/ConnectionGate.tsx";
 import DashboardHeader from "../components/DashboardHeader.tsx";
 import ConversationList from "../components/ConversationList.tsx";
@@ -61,6 +61,9 @@ const DEFAULT_UI_STATE: UIState = {
 	selectedId: null,
 	showArchived: false,
 };
+
+const RESTRICTED_ALLOWED_TABS: readonly Tab[] = ["meta", "fallas"];
+const RESTRICTED_DEFAULT_TAB: Tab = "meta";
 
 function isTab(value: unknown): value is Tab {
 	return typeof value === "string" && TABS.includes(value as Tab);
@@ -168,7 +171,27 @@ export default function HomeClient() {
 	const { activeTab, selectedId, showArchived } = uiState;
 	const { conversations, quickReplies, contactsList, loadingContacts } = dataState;
 
+	const [role, setRole] = useState<string | null>(null);
+	const restricted = role === "restricted";
+
 	const prevConversationsRef = useRef<ConversationListRow[]>([]);
+
+	// Cargar el rol del usuario logueado para saber qué mostrar (ej: rol "restricted" solo ve Meta y Fallas)
+	useEffect(() => {
+		fetch("/api/auth/session")
+			.then((res) => (res.ok ? res.json() : null))
+			.then((data) => {
+				if (data?.role) setRole(data.role);
+			})
+			.catch(() => {});
+	}, []);
+
+	// Si el rol es restringido y el tab activo no está permitido, redirigir al tab por defecto
+	useEffect(() => {
+		if (restricted && !RESTRICTED_ALLOWED_TABS.includes(activeTab)) {
+			uiDispatch({ type: "SET_TAB", tab: RESTRICTED_DEFAULT_TAB });
+		}
+	}, [restricted, activeTab]);
 
 	// Intercepta peticiones fetch para manejar sesiones expiradas/inválidas en la DB (error 401)
 	useEffect(() => {
@@ -215,8 +238,8 @@ export default function HomeClient() {
 	};
 
 	useEffect(() => {
-		loadQuickReplies();
-	}, []);
+		if (!restricted) loadQuickReplies();
+	}, [restricted]);
 
 	// Pedir permiso de notificaciones en el navegador
 	useEffect(() => {
@@ -263,10 +286,11 @@ export default function HomeClient() {
 
 	// Polling continuo cada 2s para mantener la lista actualizada
 	useEffect(() => {
+		if (restricted) return;
 		loadConversations(showArchived);
 		const interval = setInterval(() => loadConversations(showArchived), 2000);
 		return () => clearInterval(interval);
-	}, [showArchived]);
+	}, [showArchived, restricted]);
 
 	// Comparar para enviar notificaciones de navegador si llega un mensaje nuevo en segundo plano
 	useEffect(() => {
@@ -364,18 +388,21 @@ export default function HomeClient() {
 						phone={phone}
 						botProfile={botProfile}
 						onDisconnect={onDisconnect}
+						restricted={restricted}
 					/>
 
 					{/* Contenedor Principal de Contenido (pl-[3.05rem] para respetar el sidebar colapsado) */}
 					<div className="pl-[3.05rem] flex-1 h-screen w-full flex flex-col relative overflow-hidden bg-background">
 						{/* Encabezado Superior */}
-						<DashboardHeader
-							phone={connection.status === "connected" ? phone : null}
-							onDisconnect={onDisconnect}
-							botProfile={connection.status === "connected" ? botProfile : null}
-							quickReplies={quickReplies}
-							onQuickRepliesUpdated={loadQuickReplies}
-						/>
+						{!restricted && (
+							<DashboardHeader
+								phone={connection.status === "connected" ? phone : null}
+								onDisconnect={onDisconnect}
+								botProfile={connection.status === "connected" ? botProfile : null}
+								quickReplies={quickReplies}
+								onQuickRepliesUpdated={loadQuickReplies}
+							/>
+						)}
 
 						{/* Contenido Dinámico de Pestañas */}
 						<main className="flex-1 p-6 overflow-hidden flex flex-col min-h-0 relative z-10">

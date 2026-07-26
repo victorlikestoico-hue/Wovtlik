@@ -52,7 +52,7 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
 	try {
-		await requireRequestRole(req, authDeps, "viewer");
+		await requireRequestRole(req, authDeps, "restricted");
 
 		const reminders = await listMetaRemindersSent(200);
 

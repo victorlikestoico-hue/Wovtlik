@@ -14,6 +14,7 @@ export const SESSION_COOKIE_NAME = "bot_session";
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const ROLE_ORDER: Record<TeamMembershipRole, number> = {
+	restricted: 0,
 	viewer: 1,
 	agent: 2,
 	manager: 3,
