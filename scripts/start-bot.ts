@@ -6,7 +6,6 @@ import {
 	getDestructiveRestartFlagPath,
 	getSoftRestartFlagPath,
 } from "../src/lib/runtime-paths.ts";
-import { startFollowupsCron } from "./followups-cron.ts";
 import { startDashBigReportsCron } from "./dashbig-reports-cron.ts";
 import { startAppointmentsCron } from "./appointments-cron.ts";
 import { startFallasTemplateCron } from "./fallas-template-cron.ts";
@@ -22,8 +21,8 @@ async function main() {
 	// Iniciamos el socket de Baileys
 	await startWASocket();
 
-	// Levantamos la tarea programada de follow-ups
-	startFollowupsCron();
+	// Follow-ups automáticos DESACTIVADOS: no mandar más recordatorios a los
+	// agentes horas después de una conversación cuando no responden.
 
 	// Reportes automáticos de DashBig por WhatsApp
 	startDashBigReportsCron();
