@@ -1658,11 +1658,17 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 						saveTlAnnouncement(lob, { phone, name: senderName, jid: tlJid }, ttlSeconds),
 					),
 				);
+				console.log(
+					`[fallas-group] Anuncio de TL guardado: ${senderName} (${phone}) cubre [${announcedLobs.join(", ")}] por ${Math.round(ttlSeconds / 60)}min.`,
+				);
 			} catch (err) {
 				console.error("[fallas-group] Error guardando anuncio de TL:", err);
 			}
 			return;
 		}
+		// Dijo "acompaño" pero no reconocimos ningún LOB en el texto — se loguea para poder
+		// ajustar la lista de siglas si hace falta, y se sigue procesando como mensaje normal.
+		console.log(`[fallas-group] Mensaje de "acompaño" sin LOB reconocido: "${text}"`);
 	}
 
 	// Consulta por el TL en turno → responder directamente en el grupo
@@ -1686,6 +1692,7 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 				for (const lob of candidateLobs) {
 					const announcement = await getTlAnnouncement(lob);
 					if (announcement) {
+						console.log(`[fallas-group] Consulta de TL respondida con anuncio vigente: ${lob} → ${announcement.name} (${announcement.phone}).`);
 						await sendGroupTextWithPresence(
 							msg.key.remoteJid as string,
 							`@${announcement.phone} está cubriendo ${lob.toUpperCase()} ahora mismo 👋`,
