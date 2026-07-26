@@ -56,6 +56,7 @@ import {
 	insertGroupFailureReport,
 	markGroupFailureReportConfirmed,
 	markLatestGroupFailureReportResolved,
+	markTlReactionForOthers,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
 import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, logNoConnectionReport, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
@@ -519,6 +520,79 @@ const CANNOT_CONNECT_KEYWORDS = [
 
 function matchesCannotConnectIntent(msgLower: string): boolean {
 	return CANNOT_CONNECT_KEYWORDS.some((kw) => msgLower.includes(kw));
+}
+
+// LOB sin sigla "conocida" fuera de cs/sm/po/go/ov (ver LOB_DETECT) que igual aparecen en los
+// anuncios de los TL en el grupo de fallas (ej. "los acompaño con AJ, RV, PDI, FR, IM, LG, OUT
+// y ATO"). No tienen nombre largo asociado en el bot, así que se matchean por sigla exacta.
+const TL_ANNOUNCEMENT_EXTRA_LOBS = ["aj", "rv", "pdi", "fr", "im", "lg", "out", "ato", "ddc", "iv"] as const;
+const TL_ANNOUNCEMENT_QUERYABLE_LOBS = ["cs", "sm", "po", "go", "ov", ...TL_ANNOUNCEMENT_EXTRA_LOBS];
+const TL_ANNOUNCEMENT_CAP_SECONDS = 14 * 60 * 60;
+
+/** "los acompaño con...", "les acompaño...", "a partir de este momento los acompaño..." */
+function isTlAnnouncementMessage(text: string): boolean {
+	return /acompañ/i.test(text);
+}
+
+/** Detecta qué LOB dice estar cubriendo un TL en su mensaje de anuncio. */
+function extractAnnouncedLobs(text: string): string[] {
+	const found = new Set<string>();
+	if (/\bcs\s*live\b/i.test(text) || /\bcs\b/i.test(text)) found.add("cs");
+	if (/\bsocial\s*media\b/i.test(text) || /\bsm\b/i.test(text)) found.add("sm");
+	if (/\bpago\s*online\b/i.test(text) || /\bpo\b/i.test(text)) found.add("po");
+	if (/\bgesti[oó]n\s*offline\b/i.test(text) || /\bgo\b/i.test(text)) found.add("go");
+	if (/\bovernight\b/i.test(text) || /\bov\b/i.test(text)) found.add("ov");
+	for (const lob of TL_ANNOUNCEMENT_EXTRA_LOBS) {
+		if (new RegExp(`\\b${lob}\\b`, "i").test(text)) found.add(lob);
+	}
+	return [...found];
+}
+
+/**
+ * Cuántos segundos debe quedar vigente el anuncio de un TL. Si menciona una hora de fin
+ * explícita ("hasta las 14:00", "hasta las 15uy", "de 21:00 a 02:00 UY") se usa esa hora —
+ * siempre en huso horario Uruguay, como el resto de horarios que maneja el bot para este equipo
+ * (ver getTLEnTurno). Sin hora explícita, o si la calculada supera el tope, se aplica un tope de
+ * seguridad de 14hs para que el anuncio no quede vigente para siempre si el TL nunca avisa que
+ * termina turno.
+ */
+function computeTlAnnouncementTtlSeconds(text: string, now: Date): number {
+	const hastaMatch = text.match(/hasta\s+las?\s+(\d{1,2})(?::(\d{2}))?/i);
+	const rangeMatch = !hastaMatch
+		? text.match(/\bde\s+(\d{1,2})(?::(\d{2}))?\s*a\s+(\d{1,2})(?::(\d{2}))?\b/i)
+		: null;
+	if (!hastaMatch && !rangeMatch) return TL_ANNOUNCEMENT_CAP_SECONDS;
+
+	const hour = Number(hastaMatch ? hastaMatch[1] : rangeMatch![3]);
+	const minute = Number((hastaMatch ? hastaMatch[2] : rangeMatch![4]) ?? 0);
+	if (!Number.isFinite(hour) || hour < 0 || hour > 23) return TL_ANNOUNCEMENT_CAP_SECONDS;
+
+	const nowUY = new Date(now.toLocaleString("en-US", { timeZone: "America/Montevideo" }));
+	const nowMinutes = nowUY.getHours() * 60 + nowUY.getMinutes();
+	let endMinutes = hour * 60 + minute;
+	// Si la hora de fin ya pasó respecto a ahora, el turno cruza medianoche (ej. "de 21:00 a
+	// 02:00 UY") — corresponde al día siguiente.
+	if (endMinutes <= nowMinutes) endMinutes += 24 * 60;
+	const ttlSeconds = (endMinutes - nowMinutes) * 60;
+	return Math.min(Math.max(ttlSeconds, 60), TL_ANNOUNCEMENT_CAP_SECONDS);
+}
+
+type TlAnnouncement = { phone: string; name: string; jid: string };
+const tlAnnouncementKey = (lob: string) => `bot:tl_announcement:${lob}`;
+
+/** Un anuncio nuevo para el mismo LOB siempre reemplaza al anterior (mismo SET, misma key). */
+async function saveTlAnnouncement(lob: string, announcement: TlAnnouncement, ttlSeconds: number): Promise<void> {
+	await redisClient.set(tlAnnouncementKey(lob), JSON.stringify(announcement), "EX", ttlSeconds);
+}
+
+async function getTlAnnouncement(lob: string): Promise<TlAnnouncement | null> {
+	const raw = await redisClient.get(tlAnnouncementKey(lob));
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw) as TlAnnouncement;
+	} catch {
+		return null;
+	}
 }
 
 function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
@@ -1316,9 +1390,9 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 // "pausado" después) — a diferencia de las reacciones ✅ (que sí pueden ser instantáneas,
 // reaccionar rápido a un mensaje es un patrón humano normal), un texto que llega sin ningún
 // delay ni indicador de "escribiendo" es una señal de latencia sub-humana.
-async function sendGroupTextWithPresence(jid: string, text: string): Promise<void> {
+async function sendGroupTextWithPresence(jid: string, text: string, mentions?: string[]): Promise<void> {
 	await globalSock?.sendPresenceUpdate("composing", jid).catch(() => {});
-	await sendViaGlobalSock(jid, { text }, { kind: "reactive" });
+	await sendViaGlobalSock(jid, mentions ? { text, mentions } : { text }, { kind: "reactive" });
 	await globalSock?.sendPresenceUpdate("paused", jid).catch(() => {});
 }
 
@@ -1562,10 +1636,65 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// no debe acumularse, ni cargarse a Telegram/DB/sheet.
 	if (isReportTemplateMessage(text)) return;
 
+	// Cualquier mensaje de alguien distinto al agente que reportó cuenta como que "reaccionó" a
+	// sus reportes pendientes — en la práctica el único que responde a una desconexión acá es el
+	// TL en turno. Los mensajes que manda el propio bot (fromMe) nunca llegan a esta función (ver
+	// el filtro del listener más abajo), así que nunca se cuentan como si el "TL" fuera el bot.
+	markTlReactionForOthers(phone, new Date()).catch((err) =>
+		console.error("[fallas-group] Error marcando reacción de TL:", err),
+	);
+
+	// Anuncio de un TL cubriendo LOB puntuales ("los acompaño con CS y SM hasta las 14:00 UY") —
+	// se guarda por LOB individual para poder arrobar directo a ese TL cuando alguien pregunte
+	// quién está de turno (ver más abajo), en vez de mandar el link genérico del sheet.
+	if (isTlAnnouncementMessage(text)) {
+		const announcedLobs = extractAnnouncedLobs(text);
+		if (announcedLobs.length > 0) {
+			const tlJid = (msg.key?.participant as string | undefined) ?? `${phone}@s.whatsapp.net`;
+			const ttlSeconds = computeTlAnnouncementTtlSeconds(text, new Date());
+			try {
+				await Promise.all(
+					announcedLobs.map((lob) =>
+						saveTlAnnouncement(lob, { phone, name: senderName, jid: tlJid }, ttlSeconds),
+					),
+				);
+			} catch (err) {
+				console.error("[fallas-group] Error guardando anuncio de TL:", err);
+			}
+			return;
+		}
+	}
+
 	// Consulta por el TL en turno → responder directamente en el grupo
 	if (matchesTlTurnoQuery(lower)) {
 		if (globalSock && isSocketConnected) {
 			try {
+				// Si hay un anuncio vigente de un TL para el LOB puntual que se pregunta (ej. "tl de
+				// aj", "quién cubre pdi"), lo arrobamos directo en vez de mandar el link del sheet —
+				// más rápido y más preciso. Si nadie se anunció para ese LOB (o la consulta es
+				// genérica sin LOB), seguimos con el comportamiento de siempre, más abajo.
+				let candidateLobs = TL_ANNOUNCEMENT_QUERYABLE_LOBS.filter((lob) =>
+					new RegExp(`\\b${lob}\\b`, "i").test(lower),
+				);
+				if (candidateLobs.length === 0 && phone) {
+					const profile = await getAgentProfile(phone).catch(() => null);
+					const profileLob = profile?.lob?.toLowerCase().trim();
+					if (profileLob && TL_ANNOUNCEMENT_QUERYABLE_LOBS.includes(profileLob)) {
+						candidateLobs = [profileLob];
+					}
+				}
+				for (const lob of candidateLobs) {
+					const announcement = await getTlAnnouncement(lob);
+					if (announcement) {
+						await sendGroupTextWithPresence(
+							msg.key.remoteJid as string,
+							`@${announcement.phone} está cubriendo ${lob.toUpperCase()} ahora mismo 👋`,
+							[announcement.jid],
+						);
+						return;
+					}
+				}
+
 				const CS_SM_LOBS = ["cs", "sm"];
 				const GO_PO_LOBS = ["go", "po"];
 				// Detectar si el mensaje menciona explícitamente uno de los LOBs objetivo

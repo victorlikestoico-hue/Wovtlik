@@ -1084,6 +1084,7 @@ export interface GroupFailureReportRow {
 	resolved: boolean;
 	confirmed: boolean;
 	queued_offline: boolean;
+	tl_reacted_at: Date | null;
 	created_at: Date;
 }
 
@@ -1124,6 +1125,26 @@ export async function markLatestGroupFailureReportResolved(phone: string): Promi
 		   LIMIT 1
 		 )`,
 		[phone],
+	);
+}
+
+/**
+ * Marca tl_reacted_at en el reporte sin reaccionar más reciente de cada agente distinto a
+ * `phone` — se llama con cada mensaje del grupo de fallas. En la práctica el único que le
+ * contesta a un reporte de desconexión ahí es el TL en turno, así que "el primer mensaje de
+ * alguien más" funciona como proxy de "cuánto tardó el TL en reaccionar" sin necesidad de saber
+ * de antemano quién es TL. Los mensajes que manda el propio bot nunca llegan a llamar esta
+ * función (el listener los filtra por fromMe antes), así que no hace falta excluirlos acá.
+ * Se acota a las últimas horas para no marcar de golpe reportes viejos al agregar la columna.
+ */
+export async function markTlReactionForOthers(phone: string, reactedAt: Date): Promise<void> {
+	await ensureSchemaInitialized();
+	const cutoff = new Date(reactedAt.getTime() - 6 * 60 * 60 * 1000);
+	await pool.query(
+		`UPDATE group_failure_reports
+		 SET tl_reacted_at = $2
+		 WHERE phone != $1 AND tl_reacted_at IS NULL AND created_at > $3`,
+		[phone, reactedAt, cutoff],
 	);
 }
 
