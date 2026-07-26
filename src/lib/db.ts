@@ -568,6 +568,11 @@ export async function syncAgentsMaster(
 		);
 		if ((res.rowCount ?? 0) > 0) count++;
 	}
+	// Espejo real de la planilla: cualquier agente que ya no aparece en esta sincronización
+	// (cambió de LOB, se fue, etc.) se elimina para que no quede colgado bajo un TL viejo.
+	await pool.query("DELETE FROM agents_master WHERE phone <> ALL($1::text[])", [
+		rows.map((r) => r.phone),
+	]);
 	return count;
 }
 
