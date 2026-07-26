@@ -58,7 +58,7 @@ import {
 	markLatestGroupFailureReportResolved,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
-import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
+import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, logNoConnectionReport, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
 import { createCalendarEvent } from "../google-calendar-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
@@ -359,6 +359,12 @@ const absenceGroupDebounceKey = (phone: string) => `bot:fallas_group_absence_deb
 const absenceGroupTimers = new Map<string, NodeJS.Timeout>();
 const absenceGroupLastMsgKey = new Map<string, any>();
 
+// Mismo patrón que absenceGroupTimers/absenceGroupLastMsgKey pero para reportes de "no puedo/
+// no pude conectarme a mi turno" (ver processCannotConnectReport).
+const cannotConnectGroupDebounceKey = (phone: string) => `bot:fallas_group_cannot_connect_debounce:${phone}`;
+const cannotConnectGroupTimers = new Map<string, NodeJS.Timeout>();
+const cannotConnectGroupLastMsgKey = new Map<string, any>();
+
 function extractGroupMessageText(msg: any): string {
 	return (
 		msg.message?.conversation ||
@@ -495,6 +501,24 @@ const LATE_CONNECTION_KEYWORDS = [
 
 function matchesLateConnectionIntent(msgLower: string): boolean {
 	return LATE_CONNECTION_KEYWORDS.some((kw) => msgLower.includes(kw)) || matchesAbsenceIntent(msgLower);
+}
+
+// "No puedo/pude conectarme a mi turno" — a diferencia de LATE_CONNECTION_KEYWORDS (que asume
+// que el agente sí llegó a conectarse, solo que tarde), esto cubre a quien avisa que directamente
+// no va a poder o no pudo acceder a su turno. No hay nada que desconectar (nunca estuvo en línea)
+// ni una ausencia que limpiar todavía (puede avisar antes de que el sistema lo marque ausente),
+// así que solo se deja constancia del motivo — ver processCannotConnectReport.
+const CANNOT_CONNECT_KEYWORDS = [
+	"no puedo conectarme", "no me puedo conectar", "no podré conectarme", "no podre conectarme",
+	"no voy a poder conectarme", "no voy a poder entrar", "no voy a poder acceder",
+	"no pude conectarme", "no me pude conectar", "no logré conectarme", "no logre conectarme",
+	"no logro conectarme", "no puedo entrar a mi turno", "no pude entrar a mi turno",
+	"no puedo acceder a mi turno", "no pude acceder a mi turno",
+	"no me pude conectar a tiempo", "no pude conectarme a tiempo", "no puedo conectarme a tiempo",
+];
+
+function matchesCannotConnectIntent(msgLower: string): boolean {
+	return CANNOT_CONNECT_KEYWORDS.some((kw) => msgLower.includes(kw));
 }
 
 function buildDirectReply(part1: string, part2 = "", part3 = ""): string {
@@ -1457,6 +1481,71 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 	}
 }
 
+/**
+ * Igual que processFallasGroupReport/processAbsenceCorrectionReport pero para "no puedo/no pude
+ * conectarme a mi turno": junta correo + motivo acumulados y solo deja constancia en la planilla
+ * (misma pestaña "pending_offline", con status/result "ok" en vez de "pending") — no encola un
+ * offline (no hay nada que desconectar, el agente nunca llegó a conectarse) ni toca la planilla
+ * de ausencias (puede estar avisando antes de que el sistema lo marque ausente).
+ */
+async function processCannotConnectReport(phone: string, senderName: string, lastMsgKey?: any): Promise<void> {
+	const debounceKey = cannotConnectGroupDebounceKey(phone);
+	const raw = await redisClient.get(debounceKey);
+	await redisClient.del(debounceKey);
+	if (!raw) return;
+
+	const parts: string[] = JSON.parse(raw);
+	const motivo = parts.join(" ").trim();
+	if (!motivo) return;
+
+	const emailMatch = motivo.match(EMAIL_REGEX);
+	// Mismo criterio que el resto del grupo: se descarta el dominio/sufijo escrito por el agente
+	// y se reconstruye siempre con buildFullCorporateEmail.
+	const matchedEmail = emailMatch ? buildFullCorporateEmail(emailMatch[0].toLowerCase().split("@")[0]) : undefined;
+	const profile = await getAgentProfile(phone);
+	// El correo de ejemplo de la plantilla nunca cuenta como correo real.
+	const email = profile?.email || (matchedEmail && matchedEmail !== TEMPLATE_EXAMPLE_EMAIL ? matchedEmail : undefined);
+
+	try {
+		await notifyGroupFailureReport({
+			phone, senderName, email,
+			reason: `No pudo/no puede conectarse a su turno: ${motivo}`,
+			formStatus: "unknown", resolved: false,
+		});
+	} catch (err) {
+		console.error("[fallas-group] Error notificando a Telegram (no conexión a turno):", err);
+	}
+
+	let reportId: number | null = null;
+	try {
+		const saved = await insertGroupFailureReport({ phone, senderName, email, reason: motivo, formStatus: "unknown" });
+		reportId = saved.id;
+	} catch (err) {
+		console.error("[fallas-group] Error guardando el reporte de no conexión a turno:", err);
+	}
+
+	// Sin correo identificado no hay a quién registrarle el reporte — se ignora sin pedir aclaraciones.
+	if (!email || reportId === null) return;
+
+	const settings = await getSettings().catch(() => ({} as Record<string, unknown>));
+	const spreadsheetId = (settings.offline_queue_sheet_id as string) || "";
+	if (!spreadsheetId) return;
+
+	try {
+		const logged = await logNoConnectionReport(email, motivo, spreadsheetId);
+		await markGroupFailureReportConfirmed(reportId, logged);
+		if (logged && lastMsgKey && globalSock && isSocketConnected) {
+			await sendViaGlobalSock(
+				lastMsgKey.remoteJid as string,
+				{ react: { text: "✅", key: lastMsgKey } },
+				{ kind: "reactive" },
+			);
+		}
+	} catch (err) {
+		console.error("[fallas-group] Error registrando reporte de no conexión a turno:", err);
+	}
+}
+
 /** Detecta un mensaje del grupo de fallas y programa su procesamiento agregado por agente. */
 async function handleFallasGroupMessage(msg: any): Promise<void> {
 	let text = extractGroupMessageText(msg).trim();
@@ -1540,6 +1629,33 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 			await notifyGroupFailureReport({ phone, senderName, reason: text, formStatus: "unknown", resolved: true });
 		} catch (err) {
 			console.error("[fallas-group] Error notificando resolución a Telegram:", err);
+		}
+		return;
+	}
+
+	// "No puedo/no pude conectarme a mi turno" — se evalúa antes que "me conecté tarde" porque
+	// ese flujo asume que el agente sí llegó a conectarse (solo que tarde) y termina intentando
+	// limpiar una ausencia ya marcada; acá puede no haber ausencia todavía (aviso previo) ni
+	// nada que desconectar (nunca se conectó), así que solo se deja constancia del motivo.
+	const isCannotConnectReport = matchesCannotConnectIntent(lower);
+	const hasActiveCannotConnectReport = cannotConnectGroupTimers.has(phone);
+	if (isCannotConnectReport || hasActiveCannotConnectReport) {
+		const cannotConnectKey = cannotConnectGroupDebounceKey(phone);
+		const cannotConnectAccumulated: string[] = JSON.parse((await redisClient.get(cannotConnectKey)) || "[]");
+		cannotConnectAccumulated.push(text);
+		await redisClient.set(cannotConnectKey, JSON.stringify(cannotConnectAccumulated), "EX", FALLAS_GROUP_DEBOUNCE_TTL);
+		cannotConnectGroupLastMsgKey.set(phone, msg.key);
+
+		if (!hasActiveCannotConnectReport) {
+			const timer = setTimeout(() => {
+				cannotConnectGroupTimers.delete(phone);
+				const lastMsgKey = cannotConnectGroupLastMsgKey.get(phone);
+				cannotConnectGroupLastMsgKey.delete(phone);
+				processCannotConnectReport(phone, senderName, lastMsgKey).catch((err) =>
+					console.error("[fallas-group] Error procesando reporte de no conexión a turno:", err),
+				);
+			}, FALLAS_GROUP_DEBOUNCE_MS);
+			cannotConnectGroupTimers.set(phone, timer);
 		}
 		return;
 	}

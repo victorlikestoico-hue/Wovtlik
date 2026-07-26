@@ -407,6 +407,50 @@ export async function logAbsenceRemoval(
 const OFFLINE_QUEUE_TAB = "pending_offline";
 const OFFLINE_QUEUE_HEADERS = ["timestamp", "email", "reason", "status", "result"];
 
+async function ensurePendingOfflineHeader(token: string, spreadsheetId: string): Promise<void> {
+	const checkRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A1:E1`);
+	const checkRes = await fetch(
+		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${checkRange}`,
+		{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
+	);
+	if (!checkRes.ok) return;
+	const checkData = await checkRes.json() as { values?: string[][] };
+	if (checkData.values?.length) return;
+	await fetch(
+		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${checkRange}?valueInputOption=RAW`,
+		{
+			method:  "PUT",
+			headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+			body:    JSON.stringify({ values: [OFFLINE_QUEUE_HEADERS] }),
+			signal:  AbortSignal.timeout(10_000),
+		},
+	);
+}
+
+async function appendPendingOfflineRow(
+	spreadsheetId: string,
+	row:           [string, string, string, string, string],
+): Promise<boolean> {
+	const token = await getAccessToken();
+	await ensurePendingOfflineHeader(token, spreadsheetId);
+
+	const appendRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A:E`);
+	const res = await fetch(
+		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+		{
+			method:  "POST",
+			headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+			body:    JSON.stringify({ values: [row] }),
+			signal:  AbortSignal.timeout(10_000),
+		},
+	);
+	if (!res.ok) {
+		console.error(`[sheets] appendPendingOfflineRow error ${res.status}:`, await res.text());
+		return false;
+	}
+	return true;
+}
+
 /**
  * Encola una solicitud de cambio a OFFLINE en la planilla del Monitor.
  * La fila queda en status="pending" y el Monitor la procesa en el próximo ciclo (~1-3 min).
@@ -417,50 +461,30 @@ export async function queueAgentOffline(
 	spreadsheetId: string,
 ): Promise<boolean> {
 	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return false;
-
 	try {
-		const token = await getAccessToken();
-
-		// Verificar si la pestaña tiene encabezado; si no, escribirlo
-		const checkRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A1:E1`);
-		const checkRes = await fetch(
-			`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${checkRange}`,
-			{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
-		);
-		if (checkRes.ok) {
-			const checkData = await checkRes.json() as { values?: string[][] };
-			if (!checkData.values?.length) {
-				const headerRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A1:E1`);
-				await fetch(
-					`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${headerRange}?valueInputOption=RAW`,
-					{
-						method:  "PUT",
-						headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-						body:    JSON.stringify({ values: [OFFLINE_QUEUE_HEADERS] }),
-						signal:  AbortSignal.timeout(10_000),
-					},
-				);
-			}
-		}
-
-		// Agregar fila pendiente
-		const appendRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A:E`);
-		const res = await fetch(
-			`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
-			{
-				method:  "POST",
-				headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-				body:    JSON.stringify({ values: [[new Date().toISOString(), email, reason, "pending", ""]] }),
-				signal:  AbortSignal.timeout(10_000),
-			},
-		);
-		if (!res.ok) {
-			console.error(`[sheets] queueAgentOffline error ${res.status}:`, await res.text());
-			return false;
-		}
-		return true;
+		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "pending", ""]);
 	} catch (err) {
 		console.error("[sheets] Error encolando solicitud offline:", err);
+		return false;
+	}
+}
+
+/**
+ * Registra en la misma planilla/pestaña de "pending_offline" un reporte de un agente que avisa
+ * que no puede o no pudo conectarse a tiempo a su turno. A diferencia de queueAgentOffline, la
+ * fila queda con status="ok"/result="ok" (no "pending") para que el Monitor no la tome como una
+ * acción a ejecutar: acá no hay nada que desconectar, el agente nunca llegó a conectarse.
+ */
+export async function logNoConnectionReport(
+	email:         string,
+	reason:        string,
+	spreadsheetId: string,
+): Promise<boolean> {
+	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return false;
+	try {
+		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "ok", "ok"]);
+	} catch (err) {
+		console.error("[sheets] Error registrando reporte de no conexión:", err);
 		return false;
 	}
 }
