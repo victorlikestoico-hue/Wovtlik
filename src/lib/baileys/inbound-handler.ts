@@ -592,6 +592,21 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 				{ ttlMs: 95_000 },
 			);
 
+			// El chequeo de modo de la línea 520 es anterior a la espera del debounce: si un
+			// humano le escribió manualmente al mismo cliente mientras este mensaje esperaba en
+			// cola (setMode a HUMAN corre en otra invocación de handleMessage), acá ya pasó el
+			// tiempo suficiente para que ese cambio se haya guardado. Sin este re-chequeo el bot
+			// igual generaría y mandaría una respuesta encima de la del humano.
+			const conversationBeforeReply = await deps.repo.getConversationById(
+				beforeConversation.id,
+			);
+			if (!conversationBeforeReply || conversationBeforeReply.mode !== "AI") {
+				return done({
+					status: "human_mode_stored",
+					conversationId: beforeConversation.id,
+				});
+			}
+
 			// 1. Marcar los mensajes encolados como leídos y Mostrar estado "escribiendo" en paralelo
 			const messageKeys = queuedMessages
 				.filter((msg) => msg.messageId && !msg.messageId.startsWith("db-"))
@@ -705,6 +720,24 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 					queuedMessages,
 				}).catch((error) => {
 					console.error("[bot] AI CRM qualification failed:", error);
+				});
+			}
+
+			// Segundo re-chequeo: la llamada a la IA (deps.callDeepSeek) puede tardar varios
+			// segundos, tiempo de sobra para que un humano intervenga manualmente en el medio.
+			const conversationBeforeSend = await deps.repo.getConversationById(
+				beforeConversation.id,
+			);
+			if (!conversationBeforeSend || conversationBeforeSend.mode !== "AI") {
+				await deps.sendPresenceUpdate("paused", chatJid).catch((error) => {
+					console.warn(
+						"[bot] No se pudo pausar presencia tras detectar intervención humana:",
+						error,
+					);
+				});
+				return done({
+					status: "human_mode_stored",
+					conversationId: beforeConversation.id,
 				});
 			}
 
