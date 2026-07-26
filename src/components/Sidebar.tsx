@@ -22,6 +22,7 @@ import {
 	MessagesSquare,
 	Plug,
 	Plus,
+	Send,
 	Settings,
 	Settings2,
 	SquareCheckBig,
@@ -56,6 +57,7 @@ type Tab =
 	| "analytics"
 	| "fallas"
 	| "broadcasts"
+	| "meta"
 	| "settings";
 
 interface SidebarProps {
@@ -143,6 +145,7 @@ const primaryItems: NavItem[] = [
 	{ type: "tab", value: "analytics", label: "Analytics", icon: FileClock },
 	{ type: "tab", value: "chats", label: "Conversaciones", icon: MessagesSquare },
 	{ type: "tab", value: "broadcasts", label: "Envíos masivos", icon: Megaphone },
+	{ type: "tab", value: "meta", label: "Meta", icon: Send },
 ];
 
 const workspaceItems: NavItem[] = [

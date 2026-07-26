@@ -68,7 +68,32 @@ WHERE cs.id = 1
   AND NOT EXISTS (SELECT 1 FROM whatsapp_instances);
 INSERT INTO whatsapp_instances (name, is_active, created_at, updated_at)
 SELECT 'Principal', TRUE, NOW(), NOW()
-WHERE NOT EXISTS (SELECT 1 FROM whatsapp_instances);`;
+WHERE NOT EXISTS (SELECT 1 FROM whatsapp_instances);
+CREATE TABLE IF NOT EXISTS meta_reminders_sent (
+  id SERIAL PRIMARY KEY,
+  phone TEXT NOT NULL,
+  name TEXT,
+  hora_inicio TEXT,
+  etiqueta_zona TEXT,
+  whatsapp_message_id TEXT,
+  status TEXT NOT NULL DEFAULT 'sent',
+  detalle TEXT,
+  sent_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_meta_reminders_sent_sent_at ON meta_reminders_sent(sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meta_reminders_sent_phone ON meta_reminders_sent(phone);
+CREATE TABLE IF NOT EXISTS meta_replies (
+  id SERIAL PRIMARY KEY,
+  phone TEXT NOT NULL,
+  contact_name TEXT,
+  whatsapp_message_id TEXT UNIQUE,
+  content TEXT,
+  message_type TEXT NOT NULL DEFAULT 'text',
+  raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_meta_replies_received_at ON meta_replies(received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meta_replies_phone ON meta_replies(phone);`;
 
 export async function initializePostgresSchema(pool: PostgresPool) {
 	if (!pool.connect) {

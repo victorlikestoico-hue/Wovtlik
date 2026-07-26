@@ -1157,3 +1157,101 @@ export async function listGroupFailureReports(limit = 100): Promise<GroupFailure
 	return res.rows;
 }
 
+// ─── Meta Cloud API — recordatorios de turno (proyecto recordatorios-turnos) ──
+
+export interface MetaReminderSentRow {
+	id: number;
+	phone: string;
+	name: string | null;
+	hora_inicio: string | null;
+	etiqueta_zona: string | null;
+	whatsapp_message_id: string | null;
+	status: string;
+	detalle: string | null;
+	sent_at: Date;
+}
+
+export interface MetaReplyRow {
+	id: number;
+	phone: string;
+	contact_name: string | null;
+	whatsapp_message_id: string | null;
+	content: string | null;
+	message_type: string;
+	raw_payload: Record<string, unknown>;
+	received_at: Date;
+}
+
+export async function insertMetaReminderSent(input: {
+	phone: string;
+	name?: string | null;
+	horaInicio?: string | null;
+	etiquetaZona?: string | null;
+	whatsappMessageId?: string | null;
+	status?: string;
+	detalle?: string | null;
+}): Promise<MetaReminderSentRow> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<MetaReminderSentRow>(
+		`INSERT INTO meta_reminders_sent (phone, name, hora_inicio, etiqueta_zona, whatsapp_message_id, status, detalle)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING *`,
+		[
+			input.phone,
+			input.name ?? null,
+			input.horaInicio ?? null,
+			input.etiquetaZona ?? null,
+			input.whatsappMessageId ?? null,
+			input.status ?? "sent",
+			input.detalle ?? null,
+		],
+	);
+	return res.rows[0];
+}
+
+export async function listMetaRemindersSent(limit = 200): Promise<MetaReminderSentRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<MetaReminderSentRow>(
+		"SELECT * FROM meta_reminders_sent ORDER BY sent_at DESC LIMIT $1",
+		[limit],
+	);
+	return res.rows;
+}
+
+export async function insertMetaReply(input: {
+	phone: string;
+	contactName?: string | null;
+	whatsappMessageId?: string | null;
+	content?: string | null;
+	messageType?: string;
+	rawPayload?: Record<string, unknown>;
+	receivedAt?: Date;
+}): Promise<MetaReplyRow | null> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<MetaReplyRow>(
+		`INSERT INTO meta_replies (phone, contact_name, whatsapp_message_id, content, message_type, raw_payload, received_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, NOW()))
+		 ON CONFLICT (whatsapp_message_id) DO NOTHING
+		 RETURNING *`,
+		[
+			input.phone,
+			input.contactName ?? null,
+			input.whatsappMessageId ?? null,
+			input.content ?? null,
+			input.messageType ?? "text",
+			JSON.stringify(input.rawPayload ?? {}),
+			input.receivedAt ?? null,
+		],
+	);
+	return res.rows[0] ?? null;
+}
+
+export async function listMetaReplies(limit = 200): Promise<MetaReplyRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<MetaReplyRow>(
+		"SELECT * FROM meta_replies ORDER BY received_at DESC LIMIT $1",
+		[limit],
+	);
+	return res.rows;
+}
+

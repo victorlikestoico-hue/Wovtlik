@@ -5,7 +5,15 @@ export function middleware(request: NextRequest) {
 	const { pathname } = request.nextUrl;
 	
 	// Permitir rutas de API públicas, de autenticación o archivos multimedia
-	if (pathname.startsWith('/api/auth/') || pathname.startsWith('/media/')) {
+	// (/api/meta/webhook lo llama Meta directamente y /api/meta/reminders lo llama
+	// el GitHub Action de recordatorios-turnos; ninguno tiene cookie de sesión.
+	// Ambos endpoints validan su propia clave — ver route.ts de cada uno.)
+	if (
+		pathname.startsWith('/api/auth/') ||
+		pathname.startsWith('/media/') ||
+		pathname === '/api/meta/webhook' ||
+		pathname === '/api/meta/reminders'
+	) {
 		return NextResponse.next();
 	}
 
