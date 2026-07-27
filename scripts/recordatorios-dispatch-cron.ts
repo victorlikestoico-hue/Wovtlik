@@ -4,15 +4,18 @@ import "./env-loader.ts";
 // no corre con esa frecuencia bajo carga -- se confirmó que en la práctica corre
 // ~1 vez por hora, lo que hace que se pierdan recordatorios de turno (la ventana
 // de envío se cierra cuando arranca el turno, sin reintento). Como WOpen ya corre
-// 24/7 en Railway, este loop dispara el workflow por API cada 5 min para
-// complementar el cron nativo y acortar la demora real entre corridas.
+// 24/7 en Railway, este loop dispara el workflow por API cada 15 min para
+// complementar el cron nativo y acortar la demora real entre corridas. 15 min
+// (no menos) porque el repo "recordatorios" es privado y cada corrida consume
+// minutos de Actions de la cuota del plan de GitHub; con el margen de 20 min
+// de MINUTOS_ANTES_API alcanza sin disparar más seguido.
 
 const GITHUB_OWNER = "victorlikestoico-hue";
 const GITHUB_REPO = "recordatorios";
 const GITHUB_WORKFLOW_FILE = "recordatorios.yml";
 const GITHUB_REF = "main";
 
-const DISPATCH_INTERVAL_MS = 5 * 60 * 1000;
+const DISPATCH_INTERVAL_MS = 15 * 60 * 1000;
 
 async function dispatchOnce(): Promise<void> {
 	const token = process.env.GITHUB_RECORDATORIOS_TOKEN;
@@ -54,7 +57,7 @@ export function startRecordatoriosDispatchCron(): void {
 		return;
 	}
 
-	console.log("[recordatorios-dispatch-cron] Iniciando loop de disparo del workflow (cada 5 min)...");
+	console.log("[recordatorios-dispatch-cron] Iniciando loop de disparo del workflow (cada 15 min)...");
 	void dispatchOnce();
 	setInterval(() => void dispatchOnce(), DISPATCH_INTERVAL_MS);
 }
