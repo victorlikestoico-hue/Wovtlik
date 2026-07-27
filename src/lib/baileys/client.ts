@@ -332,6 +332,12 @@ function findEmbeddedPartialEmailToken(text: string): string | null {
 const CORPORATE_EMAIL_SUFFIX = "_ndo.ext";
 const CORPORATE_EMAIL_DOMAIN = "@pedidosya.com";
 
+// Los agentes tercerizados/externos tienen su correo real terminado en "_ext" en vez de
+// "_ndo.ext" — es un sufijo corporativo válido, no una abreviación a completar. Si ya viene
+// con cualquiera de estos sufijos no hay que tocarlo, o se termina duplicando (ej. la agente
+// escribe "karen.suarez_ext@pedidosya.com" y queda "karen.suarez_ext_ndo.ext@pedidosya.com").
+const CORPORATE_EMAIL_KNOWN_SUFFIXES = [CORPORATE_EMAIL_SUFFIX, "_ext"];
+
 // Typo frecuente: al agente se le va la mano y escribe ".com" en vez de "@pedidosya.com"
 // después del sufijo corporativo (le falta la arroba), ej. "cristian.david_ndo.ext.com".
 // Sin este caso especial, PARTIAL_EMAIL_FALSE_POSITIVE_EXT lo descarta por terminar en ".com"
@@ -342,7 +348,7 @@ const CORPORATE_EMAIL_TYPO_RE = /^([\wáéíóúñ+%-]+(?:\.[\wáéíóúñ+%-]+
 function buildFullCorporateEmail(localPart: string): string {
 	const typoMatch = localPart.match(CORPORATE_EMAIL_TYPO_RE);
 	const base = typoMatch ? typoMatch[1] : localPart;
-	const hasSuffix = base.toLowerCase().endsWith(CORPORATE_EMAIL_SUFFIX);
+	const hasSuffix = CORPORATE_EMAIL_KNOWN_SUFFIXES.some((suffix) => base.toLowerCase().endsWith(suffix));
 	return `${base}${hasSuffix ? "" : CORPORATE_EMAIL_SUFFIX}${CORPORATE_EMAIL_DOMAIN}`;
 }
 
