@@ -2781,16 +2781,21 @@ export async function startWASocket() {
 			);
 			if (isDecryptionFailure && msg.key.remoteJid) {
 				const remoteJid = msg.key.remoteJid;
-				// Aplicar solo para chats 1:1
-				if (remoteJid.endsWith("@s.whatsapp.net") || remoteJid.endsWith("@lid")) {
+				// En 1:1 el JID a reparar es el propio remoteJid. En grupos (@g.us) la sesión rota es
+				// la del participante que envió el mensaje, no la del grupo — @g.us no es una sesión
+				// de Signal válida para assertSessions, así que ahí hay que resolver al remitente.
+				const sessionJid = remoteJid.endsWith("@g.us")
+					? ((msg.key?.participantPn as string | undefined) ?? (msg.key?.participant as string | undefined))
+					: (remoteJid.endsWith("@s.whatsapp.net") || remoteJid.endsWith("@lid") ? remoteJid : undefined);
+				if (sessionJid) {
 					console.warn(
-						`[bot-warning] Detectado posible error de desencriptación (Bad MAC) para el JID ${remoteJid}. Forzando recreación de sesión de Signal...`
+						`[bot-warning] Detectado posible error de desencriptación (Bad MAC) para el JID ${sessionJid}${remoteJid !== sessionJid ? ` (grupo ${remoteJid})` : ""}. Forzando recreación de sesión de Signal...`
 					);
 					try {
-						await sock.assertSessions([remoteJid], true);
-						console.log(`[bot] Sesión de Signal para ${remoteJid} restablecida exitosamente.`);
+						await sock.assertSessions([sessionJid], true);
+						console.log(`[bot] Sesión de Signal para ${sessionJid} restablecida exitosamente.`);
 					} catch (err) {
-						console.error(`[bot-error] Falló al establecer sesión de Signal para ${remoteJid}:`, err);
+						console.error(`[bot-error] Falló al establecer sesión de Signal para ${sessionJid}:`, err);
 					}
 				}
 			}
