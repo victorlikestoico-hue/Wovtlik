@@ -11,6 +11,7 @@ import { startAppointmentsCron } from "./appointments-cron.ts";
 import { startFallasTemplateCron } from "./fallas-template-cron.ts";
 import { startHorasCubrirCron } from "./horas-cubrir-cron.ts";
 import { startFormBroadcastCron } from "./form-broadcast-cron.ts";
+import { startRecordatoriosDispatchCron } from "./recordatorios-dispatch-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -38,6 +39,9 @@ async function main() {
 
 	// Formulario mensual: envía el link a todos los agentes el día 2 y el día 7 de cada mes a las 9h Colombia
 	startFormBroadcastCron();
+
+	// Disparo del workflow de recordatorios-turnos cada 5 min (el cron nativo de GH Actions no es confiable)
+	startRecordatoriosDispatchCron();
 
 	// Loop de polling para la desconexión / reinicio manual controlado desde el frontend
 	setInterval(async () => {
