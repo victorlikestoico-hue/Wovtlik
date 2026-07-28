@@ -2595,6 +2595,20 @@ export async function startWASocket() {
 
 	globalSock = sock;
 
+	// Prueba diagnóstica: si PAIRING_CODE_PHONE está seteada y es un login nuevo, pedimos
+	// código de emparejamiento en vez de esperar el QR, para descartar si el 405 en el
+	// handshake bloquea también este camino (ver investigación del loop de reconexión).
+	if (isFreshLogin && process.env.PAIRING_CODE_PHONE) {
+		setTimeout(async () => {
+			try {
+				const code = await sock.requestPairingCode(process.env.PAIRING_CODE_PHONE!);
+				console.log(`[bot] Código de emparejamiento generado: ${code}`);
+			} catch (error) {
+				console.error("[bot] Error solicitando código de emparejamiento:", error);
+			}
+		}, 3000);
+	}
+
 	sock.ev.on("creds.update", saveCreds);
 
 	sock.ev.on("connection.update", async (update: any) => {
