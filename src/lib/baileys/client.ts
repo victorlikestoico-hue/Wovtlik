@@ -1627,26 +1627,16 @@ async function processCannotConnectReport(phone: string, senderName: string, las
 	}
 }
 
-/** Detecta un mensaje del grupo de fallas y programa su procesamiento agregado por agente. */
-async function handleFallasGroupMessage(msg: any): Promise<void> {
-	let text = extractGroupMessageText(msg).trim();
-	if (!text) return;
-
-	const phone = resolveFallasGroupSenderPhone(msg);
-	if (!phone) return;
-
-	const senderName = (msg.pushName as string) || phone;
-	const lower = text.toLowerCase();
-
-	// Alguien (un TL, otro agente) reenvió la plantilla de "cómo reportar una falla" como
-	// recordatorio — es puramente informativa, no un reporte real. Se ignora por completo:
-	// no debe acumularse, ni cargarse a Telegram/DB/sheet.
-	if (isReportTemplateMessage(text)) return;
-
-	// Cualquier mensaje de alguien distinto al agente que reportó cuenta como que "reaccionó" a
-	// sus reportes pendientes — en la práctica el único que responde a una desconexión acá es el
-	// TL en turno. Los mensajes que manda el propio bot (fromMe) nunca llegan a esta función (ver
-	// el filtro del listener más abajo), así que nunca se cuentan como si el "TL" fuera el bot.
+/**
+ * Marca que el TL reaccionó (texto o reacción de WhatsApp) y, para cada reporte que haya
+ * quedado marcado, actualiza los segundos transcurridos en su fila del sheet "pending_offline".
+ * Cualquier mensaje o reacción de alguien distinto al agente que reportó cuenta como que
+ * "reaccionó" a sus reportes pendientes — en la práctica el único que responde a una
+ * desconexión acá es el TL en turno. Los mensajes/reacciones que manda el propio bot (fromMe)
+ * nunca llegan a esta función (ver el filtro del listener más abajo), así que nunca se cuentan
+ * como si el "TL" fuera el bot.
+ */
+function markTlReactionAndUpdateSheet(phone: string): void {
 	markTlReactionForOthers(phone, new Date())
 		.then(async (rows) => {
 			if (rows.length === 0) return;
@@ -1662,6 +1652,33 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 			}
 		})
 		.catch((err) => console.error("[fallas-group] Error marcando reacción de TL:", err));
+}
+
+/** Detecta un mensaje del grupo de fallas y programa su procesamiento agregado por agente. */
+async function handleFallasGroupMessage(msg: any): Promise<void> {
+	const phone = resolveFallasGroupSenderPhone(msg);
+	if (!phone) return;
+
+	// Una reacción de WhatsApp (👍, ✅, etc.) sobre cualquier mensaje del grupo no trae texto
+	// (extractGroupMessageText da ""), así que se resuelve acá antes de exigir texto — muchos TL
+	// solo reaccionan al reporte en vez de responder con un mensaje.
+	if (msg.message?.reactionMessage) {
+		markTlReactionAndUpdateSheet(phone);
+		return;
+	}
+
+	let text = extractGroupMessageText(msg).trim();
+	if (!text) return;
+
+	const senderName = (msg.pushName as string) || phone;
+	const lower = text.toLowerCase();
+
+	// Alguien (un TL, otro agente) reenvió la plantilla de "cómo reportar una falla" como
+	// recordatorio — es puramente informativa, no un reporte real. Se ignora por completo:
+	// no debe acumularse, ni cargarse a Telegram/DB/sheet.
+	if (isReportTemplateMessage(text)) return;
+
+	markTlReactionAndUpdateSheet(phone);
 
 	// Anuncio de un TL cubriendo LOB puntuales ("los acompaño con CS y SM hasta las 14:00 UY") —
 	// se guarda por LOB individual para poder arrobar directo a ese TL cuando alguien pregunte
