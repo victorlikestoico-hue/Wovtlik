@@ -59,7 +59,7 @@ import {
 	markTlReactionForOthers,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
-import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, logNoConnectionReport, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
+import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, logNoConnectionReport, updatePendingOfflineReactionSeconds, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
 import { createCalendarEvent } from "../google-calendar-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
@@ -1365,7 +1365,7 @@ async function tryGoOfflineReply(phone: string, message: string): Promise<string
 
 	try {
 		const queued = await queueAgentOffline(profile.email, reason, spreadsheetId);
-		if (queued) {
+		if (queued.ok) {
 			await redisClient.del(pendingIntentKey(phone));
 			const firstName = deriveFirstNameFromEmail(profile.email);
 			return buildDirectReply(
@@ -1434,7 +1434,7 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 
 	let reportId: number | null = null;
 	try {
-		const saved = await insertGroupFailureReport({ phone, senderName, email, reason, formStatus });
+		const saved = await insertGroupFailureReport({ phone, senderName, email, reason, formStatus, lob });
 		reportId = saved.id;
 	} catch (err) {
 		console.error("[fallas-group] Error guardando el reporte en la base:", err);
@@ -1450,9 +1450,9 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 
 	try {
 		const queueReason = `${failureType}${lob ? ` — LOB ${lob}` : ""} (reportado en grupo de fallas)`;
-		const queued = await queueAgentOffline(email, queueReason, spreadsheetId);
-		await markGroupFailureReportConfirmed(reportId, queued);
-		if (queued && lastMsgKey) {
+		const queued = await queueAgentOffline(email, queueReason, spreadsheetId, lob);
+		await markGroupFailureReportConfirmed(reportId, queued.ok, queued.row != null ? { spreadsheetId, row: queued.row } : null);
+		if (queued.ok && lastMsgKey) {
 			await sendViaGlobalSock(
 				lastMsgKey.remoteJid as string,
 				{ react: { text: "✅", key: lastMsgKey } },
@@ -1585,6 +1585,7 @@ async function processCannotConnectReport(phone: string, senderName: string, las
 	const profile = await getAgentProfile(phone);
 	// El correo de ejemplo de la plantilla nunca cuenta como correo real.
 	const email = profile?.email || (matchedEmail && matchedEmail !== TEMPLATE_EXAMPLE_EMAIL ? matchedEmail : undefined);
+	const lob = extractLobFromText(motivo) ?? undefined;
 
 	try {
 		await notifyGroupFailureReport({
@@ -1598,7 +1599,7 @@ async function processCannotConnectReport(phone: string, senderName: string, las
 
 	let reportId: number | null = null;
 	try {
-		const saved = await insertGroupFailureReport({ phone, senderName, email, reason: motivo, formStatus: "unknown" });
+		const saved = await insertGroupFailureReport({ phone, senderName, email, reason: motivo, formStatus: "unknown", lob });
 		reportId = saved.id;
 	} catch (err) {
 		console.error("[fallas-group] Error guardando el reporte de no conexión a turno:", err);
@@ -1612,9 +1613,9 @@ async function processCannotConnectReport(phone: string, senderName: string, las
 	if (!spreadsheetId) return;
 
 	try {
-		const logged = await logNoConnectionReport(email, motivo, spreadsheetId);
-		await markGroupFailureReportConfirmed(reportId, logged);
-		if (logged && lastMsgKey && globalSock && isSocketConnected) {
+		const logged = await logNoConnectionReport(email, motivo, spreadsheetId, lob);
+		await markGroupFailureReportConfirmed(reportId, logged.ok, logged.row != null ? { spreadsheetId, row: logged.row } : null);
+		if (logged.ok && lastMsgKey && globalSock && isSocketConnected) {
 			await sendViaGlobalSock(
 				lastMsgKey.remoteJid as string,
 				{ react: { text: "✅", key: lastMsgKey } },
@@ -1646,9 +1647,21 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// sus reportes pendientes — en la práctica el único que responde a una desconexión acá es el
 	// TL en turno. Los mensajes que manda el propio bot (fromMe) nunca llegan a esta función (ver
 	// el filtro del listener más abajo), así que nunca se cuentan como si el "TL" fuera el bot.
-	markTlReactionForOthers(phone, new Date()).catch((err) =>
-		console.error("[fallas-group] Error marcando reacción de TL:", err),
-	);
+	markTlReactionForOthers(phone, new Date())
+		.then(async (rows) => {
+			if (rows.length === 0) return;
+			const fallbackSheetId = ((await getSettings().catch(() => ({} as Record<string, unknown>))).offline_queue_sheet_id as string) || "";
+			for (const row of rows) {
+				if (row.sheet_row == null) continue;
+				const spreadsheetId = row.sheet_spreadsheet_id || fallbackSheetId;
+				if (!spreadsheetId) continue;
+				const seconds = Math.round((Date.now() - row.created_at.getTime()) / 1000);
+				updatePendingOfflineReactionSeconds(spreadsheetId, row.sheet_row, seconds).catch((err) =>
+					console.error("[fallas-group] Error actualizando segundos de reacción en el sheet:", err),
+				);
+			}
+		})
+		.catch((err) => console.error("[fallas-group] Error marcando reacción de TL:", err));
 
 	// Anuncio de un TL cubriendo LOB puntuales ("los acompaño con CS y SM hasta las 14:00 UY") —
 	// se guarda por LOB individual para poder arrobar directo a ese TL cuando alguien pregunte

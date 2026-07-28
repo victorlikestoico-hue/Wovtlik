@@ -135,8 +135,9 @@ export async function readSheetByGid(spreadsheetId: string, gid: string): Promis
 
 // ─── Sheet write ──────────────────────────────────────────────────────────────
 
-async function updateCell(
+async function updateNamedCell(
 	spreadsheetId: string,
+	sheetName: string,
 	rowNumber: number,
 	colIndex: number,
 	// Las columnas tipo checkbox (ej. "Asistencia") necesitan un booleano real —
@@ -146,7 +147,7 @@ async function updateCell(
 ): Promise<void> {
 	const token = await getAccessToken();
 	const col   = colIndexToLetter(colIndex);
-	const range = encodeURIComponent(`'${SHEET_NAME}'!${col}${rowNumber}`);
+	const range = encodeURIComponent(`'${sheetName}'!${col}${rowNumber}`);
 	const res   = await fetch(
 		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=RAW`,
 		{
@@ -157,6 +158,15 @@ async function updateCell(
 		},
 	);
 	if (!res.ok) throw new Error(`[sheets] Write error ${res.status}: ${(await res.text()).substring(0, 200)}`);
+}
+
+async function updateCell(
+	spreadsheetId: string,
+	rowNumber: number,
+	colIndex: number,
+	value: string | boolean,
+): Promise<void> {
+	return updateNamedCell(spreadsheetId, SHEET_NAME, rowNumber, colIndex, value);
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -405,10 +415,13 @@ export async function logAbsenceRemoval(
 }
 
 const OFFLINE_QUEUE_TAB = "pending_offline";
-const OFFLINE_QUEUE_HEADERS = ["timestamp", "email", "reason", "status", "result"];
+// lob y tl_reaction_seconds van al final (columnas F/G) para no romper el layout A-E que
+// el Monitor externo (fuera de este repo) lee por posición.
+const OFFLINE_QUEUE_HEADERS = ["timestamp", "email", "reason", "status", "result", "lob", "tl_reaction_seconds"];
+const TL_REACTION_SECONDS_COL = 6; // columna G — mantener sincronizado con OFFLINE_QUEUE_HEADERS
 
 async function ensurePendingOfflineHeader(token: string, spreadsheetId: string): Promise<void> {
-	const checkRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A1:E1`);
+	const checkRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A1:G1`);
 	const checkRes = await fetch(
 		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${checkRange}`,
 		{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
@@ -427,14 +440,21 @@ async function ensurePendingOfflineHeader(token: string, spreadsheetId: string):
 	);
 }
 
+/** Extrae el número de fila 1-based de un `updatedRange` tipo "'pending_offline'!A15:G15". */
+function parseRowFromUpdatedRange(updatedRange: string | undefined): number | null {
+	if (!updatedRange) return null;
+	const m = updatedRange.match(/![A-Z]+(\d+)/);
+	return m ? parseInt(m[1], 10) : null;
+}
+
 async function appendPendingOfflineRow(
 	spreadsheetId: string,
-	row:           [string, string, string, string, string],
-): Promise<boolean> {
+	row:           [string, string, string, string, string, string, string],
+): Promise<{ ok: boolean; row: number | null }> {
 	const token = await getAccessToken();
 	await ensurePendingOfflineHeader(token, spreadsheetId);
 
-	const appendRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A:E`);
+	const appendRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A:G`);
 	const res = await fetch(
 		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
 		{
@@ -446,9 +466,10 @@ async function appendPendingOfflineRow(
 	);
 	if (!res.ok) {
 		console.error(`[sheets] appendPendingOfflineRow error ${res.status}:`, await res.text());
-		return false;
+		return { ok: false, row: null };
 	}
-	return true;
+	const data = await res.json() as { updates?: { updatedRange?: string } };
+	return { ok: true, row: parseRowFromUpdatedRange(data.updates?.updatedRange) };
 }
 
 /**
@@ -459,13 +480,14 @@ export async function queueAgentOffline(
 	email:         string,
 	reason:        string,
 	spreadsheetId: string,
-): Promise<boolean> {
-	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return false;
+	lob?:          string,
+): Promise<{ ok: boolean; row: number | null }> {
+	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return { ok: false, row: null };
 	try {
-		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "pending", ""]);
+		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "pending", "", lob ?? "", ""]);
 	} catch (err) {
 		console.error("[sheets] Error encolando solicitud offline:", err);
-		return false;
+		return { ok: false, row: null };
 	}
 }
 
@@ -479,12 +501,34 @@ export async function logNoConnectionReport(
 	email:         string,
 	reason:        string,
 	spreadsheetId: string,
+	lob?:          string,
+): Promise<{ ok: boolean; row: number | null }> {
+	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return { ok: false, row: null };
+	try {
+		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "ok", "ok", lob ?? "", ""]);
+	} catch (err) {
+		console.error("[sheets] Error registrando reporte de no conexión:", err);
+		return { ok: false, row: null };
+	}
+}
+
+/**
+ * Escribe cuántos segundos tardó el TL en reaccionar a un reporte ya encolado, en la celda de
+ * la columna G de su fila original en "pending_offline". Solo toca esa celda — nunca status ni
+ * result (D/E) — así que no puede pisar lo que ya haya escrito el Monitor externo aunque este
+ * update llegue después de que el Monitor procesó la fila.
+ */
+export async function updatePendingOfflineReactionSeconds(
+	spreadsheetId: string,
+	rowNumber:     number,
+	seconds:       number,
 ): Promise<boolean> {
 	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return false;
 	try {
-		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "ok", "ok"]);
+		await updateNamedCell(spreadsheetId, OFFLINE_QUEUE_TAB, rowNumber, TL_REACTION_SECONDS_COL, String(seconds));
+		return true;
 	} catch (err) {
-		console.error("[sheets] Error registrando reporte de no conexión:", err);
+		console.error("[sheets] Error actualizando segundos de reacción del TL:", err);
 		return false;
 	}
 }

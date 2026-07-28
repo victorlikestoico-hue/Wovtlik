@@ -1090,6 +1090,9 @@ export interface GroupFailureReportRow {
 	confirmed: boolean;
 	queued_offline: boolean;
 	tl_reacted_at: Date | null;
+	lob: string | null;
+	sheet_row: number | null;
+	sheet_spreadsheet_id: string | null;
 	created_at: Date;
 }
 
@@ -1099,22 +1102,29 @@ export async function insertGroupFailureReport(input: {
 	email?: string | null;
 	reason: string;
 	formStatus: "yes" | "no" | "unknown";
+	lob?: string | null;
 }): Promise<GroupFailureReportRow> {
 	await ensureSchemaInitialized();
 	const res = await pool.query<GroupFailureReportRow>(
-		`INSERT INTO group_failure_reports (phone, sender_name, email, reason, form_status)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO group_failure_reports (phone, sender_name, email, reason, form_status, lob)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING *`,
-		[input.phone, input.senderName, input.email ?? null, input.reason, input.formStatus],
+		[input.phone, input.senderName, input.email ?? null, input.reason, input.formStatus, input.lob ?? null],
 	);
 	return res.rows[0];
 }
 
-export async function markGroupFailureReportConfirmed(id: number, queuedOffline: boolean): Promise<void> {
+export async function markGroupFailureReportConfirmed(
+	id: number,
+	queuedOffline: boolean,
+	sheetLocation?: { spreadsheetId: string; row: number } | null,
+): Promise<void> {
 	await ensureSchemaInitialized();
 	await pool.query(
-		"UPDATE group_failure_reports SET confirmed = TRUE, queued_offline = $2 WHERE id = $1",
-		[id, queuedOffline],
+		`UPDATE group_failure_reports
+		 SET confirmed = TRUE, queued_offline = $2, sheet_row = $3, sheet_spreadsheet_id = $4
+		 WHERE id = $1`,
+		[id, queuedOffline, sheetLocation?.row ?? null, sheetLocation?.spreadsheetId ?? null],
 	);
 }
 
@@ -1142,15 +1152,25 @@ export async function markLatestGroupFailureReportResolved(phone: string): Promi
  * función (el listener los filtra por fromMe antes), así que no hace falta excluirlos acá.
  * Se acota a las últimas horas para no marcar de golpe reportes viejos al agregar la columna.
  */
-export async function markTlReactionForOthers(phone: string, reactedAt: Date): Promise<void> {
+export interface TlReactionUpdateRow {
+	id: number;
+	phone: string;
+	sheet_row: number | null;
+	sheet_spreadsheet_id: string | null;
+	created_at: Date;
+}
+
+export async function markTlReactionForOthers(phone: string, reactedAt: Date): Promise<TlReactionUpdateRow[]> {
 	await ensureSchemaInitialized();
 	const cutoff = new Date(reactedAt.getTime() - 6 * 60 * 60 * 1000);
-	await pool.query(
+	const res = await pool.query<TlReactionUpdateRow>(
 		`UPDATE group_failure_reports
 		 SET tl_reacted_at = $2
-		 WHERE phone != $1 AND tl_reacted_at IS NULL AND created_at > $3`,
+		 WHERE phone != $1 AND tl_reacted_at IS NULL AND created_at > $3
+		 RETURNING id, phone, sheet_row, sheet_spreadsheet_id, created_at`,
 		[phone, reactedAt, cutoff],
 	);
+	return res.rows;
 }
 
 export async function listGroupFailureReports(limit = 100): Promise<GroupFailureReportRow[]> {

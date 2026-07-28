@@ -15,13 +15,13 @@ export async function POST(req: Request) {
 			return NextResponse.json({ ok: false, error: "offline_queue_sheet_id no configurado" }, { status: 400 });
 		}
 
-		const ok = await queueAgentOffline(
+		const queued = await queueAgentOffline(
 			email.trim().toLowerCase(),
 			"Manual desde panel de administración",
 			spreadsheetId,
 		);
 
-		return NextResponse.json({ ok, email: email.trim().toLowerCase() });
+		return NextResponse.json({ ok: queued.ok, email: email.trim().toLowerCase() });
 	} catch (err) {
 		return NextResponse.json({ ok: false, error: String(err) }, { status: 500 });
 	}
