@@ -1090,6 +1090,7 @@ export interface GroupFailureReportRow {
 	confirmed: boolean;
 	queued_offline: boolean;
 	tl_reacted_at: Date | null;
+	tl_reacted_by: string | null;
 	lob: string | null;
 	sheet_row: number | null;
 	sheet_spreadsheet_id: string | null;
@@ -1160,15 +1161,19 @@ export interface TlReactionUpdateRow {
 	created_at: Date;
 }
 
-export async function markTlReactionForOthers(phone: string, reactedAt: Date): Promise<TlReactionUpdateRow[]> {
+export async function markTlReactionForOthers(
+	phone: string,
+	reactedAt: Date,
+	reactedByName: string,
+): Promise<TlReactionUpdateRow[]> {
 	await ensureSchemaInitialized();
 	const cutoff = new Date(reactedAt.getTime() - 6 * 60 * 60 * 1000);
 	const res = await pool.query<TlReactionUpdateRow>(
 		`UPDATE group_failure_reports
-		 SET tl_reacted_at = $2
+		 SET tl_reacted_at = $2, tl_reacted_by = $4
 		 WHERE phone != $1 AND tl_reacted_at IS NULL AND created_at > $3
 		 RETURNING id, phone, sheet_row, sheet_spreadsheet_id, created_at`,
-		[phone, reactedAt, cutoff],
+		[phone, reactedAt, cutoff, reactedByName],
 	);
 	return res.rows;
 }

@@ -59,7 +59,7 @@ import {
 	markTlReactionForOthers,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
-import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, logNoConnectionReport, updatePendingOfflineReactionSeconds, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
+import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, logNoConnectionReport, updatePendingOfflineReaction, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
 import { createCalendarEvent } from "../google-calendar-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
@@ -1636,8 +1636,8 @@ async function processCannotConnectReport(phone: string, senderName: string, las
  * nunca llegan a esta función (ver el filtro del listener más abajo), así que nunca se cuentan
  * como si el "TL" fuera el bot.
  */
-function markTlReactionAndUpdateSheet(phone: string): void {
-	markTlReactionForOthers(phone, new Date())
+function markTlReactionAndUpdateSheet(phone: string, reactedByName: string): void {
+	markTlReactionForOthers(phone, new Date(), reactedByName)
 		.then(async (rows) => {
 			if (rows.length === 0) return;
 			const fallbackSheetId = ((await getSettings().catch(() => ({} as Record<string, unknown>))).offline_queue_sheet_id as string) || "";
@@ -1646,7 +1646,7 @@ function markTlReactionAndUpdateSheet(phone: string): void {
 				const spreadsheetId = row.sheet_spreadsheet_id || fallbackSheetId;
 				if (!spreadsheetId) continue;
 				const seconds = Math.round((Date.now() - row.created_at.getTime()) / 1000);
-				updatePendingOfflineReactionSeconds(spreadsheetId, row.sheet_row, seconds).catch((err) =>
+				updatePendingOfflineReaction(spreadsheetId, row.sheet_row, seconds, reactedByName).catch((err) =>
 					console.error("[fallas-group] Error actualizando segundos de reacción en el sheet:", err),
 				);
 			}
@@ -1659,18 +1659,19 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	const phone = resolveFallasGroupSenderPhone(msg);
 	if (!phone) return;
 
+	const senderName = (msg.pushName as string) || phone;
+
 	// Una reacción de WhatsApp (👍, ✅, etc.) sobre cualquier mensaje del grupo no trae texto
 	// (extractGroupMessageText da ""), así que se resuelve acá antes de exigir texto — muchos TL
 	// solo reaccionan al reporte en vez de responder con un mensaje.
 	if (msg.message?.reactionMessage) {
-		markTlReactionAndUpdateSheet(phone);
+		markTlReactionAndUpdateSheet(phone, senderName);
 		return;
 	}
 
 	let text = extractGroupMessageText(msg).trim();
 	if (!text) return;
 
-	const senderName = (msg.pushName as string) || phone;
 	const lower = text.toLowerCase();
 
 	// Alguien (un TL, otro agente) reenvió la plantilla de "cómo reportar una falla" como
@@ -1678,7 +1679,7 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// no debe acumularse, ni cargarse a Telegram/DB/sheet.
 	if (isReportTemplateMessage(text)) return;
 
-	markTlReactionAndUpdateSheet(phone);
+	markTlReactionAndUpdateSheet(phone, senderName);
 
 	// Anuncio de un TL cubriendo LOB puntuales ("los acompaño con CS y SM hasta las 14:00 UY") —
 	// se guarda por LOB individual para poder arrobar directo a ese TL cuando alguien pregunte

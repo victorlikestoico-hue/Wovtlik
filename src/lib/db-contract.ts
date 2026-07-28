@@ -398,6 +398,7 @@ ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS tl_reacted_at TIMESTA
 ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS lob TEXT DEFAULT NULL;
 ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS sheet_row INTEGER DEFAULT NULL;
 ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS sheet_spreadsheet_id TEXT DEFAULT NULL;
+ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS tl_reacted_by TEXT DEFAULT NULL;
 
 CREATE TABLE IF NOT EXISTS agents_master (
   id SERIAL PRIMARY KEY,

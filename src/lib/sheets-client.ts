@@ -415,13 +415,14 @@ export async function logAbsenceRemoval(
 }
 
 const OFFLINE_QUEUE_TAB = "pending_offline";
-// lob y tl_reaction_seconds van al final (columnas F/G) para no romper el layout A-E que
-// el Monitor externo (fuera de este repo) lee por posición.
-const OFFLINE_QUEUE_HEADERS = ["timestamp", "email", "reason", "status", "result", "lob", "tl_reaction_seconds"];
+// lob, tl_reaction_seconds y tl_name van al final (columnas F/G/H) para no romper el layout
+// A-E que el Monitor externo (fuera de este repo) lee por posición.
+const OFFLINE_QUEUE_HEADERS = ["timestamp", "email", "reason", "status", "result", "lob", "tl_reaction_seconds", "tl_name"];
 const TL_REACTION_SECONDS_COL = 6; // columna G — mantener sincronizado con OFFLINE_QUEUE_HEADERS
+const TL_NAME_COL = 7; // columna H — mantener sincronizado con OFFLINE_QUEUE_HEADERS
 
 async function ensurePendingOfflineHeader(token: string, spreadsheetId: string): Promise<void> {
-	const checkRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A1:G1`);
+	const checkRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A1:H1`);
 	const checkRes = await fetch(
 		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${checkRange}`,
 		{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
@@ -449,12 +450,12 @@ function parseRowFromUpdatedRange(updatedRange: string | undefined): number | nu
 
 async function appendPendingOfflineRow(
 	spreadsheetId: string,
-	row:           [string, string, string, string, string, string, string],
+	row:           [string, string, string, string, string, string, string, string],
 ): Promise<{ ok: boolean; row: number | null }> {
 	const token = await getAccessToken();
 	await ensurePendingOfflineHeader(token, spreadsheetId);
 
-	const appendRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A:G`);
+	const appendRange = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!A:H`);
 	const res = await fetch(
 		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
 		{
@@ -484,7 +485,7 @@ export async function queueAgentOffline(
 ): Promise<{ ok: boolean; row: number | null }> {
 	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return { ok: false, row: null };
 	try {
-		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "pending", "", lob ?? "", ""]);
+		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "pending", "", lob ?? "", "", ""]);
 	} catch (err) {
 		console.error("[sheets] Error encolando solicitud offline:", err);
 		return { ok: false, row: null };
@@ -505,7 +506,7 @@ export async function logNoConnectionReport(
 ): Promise<{ ok: boolean; row: number | null }> {
 	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return { ok: false, row: null };
 	try {
-		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "ok", "ok", lob ?? "", ""]);
+		return await appendPendingOfflineRow(spreadsheetId, [new Date().toISOString(), email, reason, "ok", "ok", lob ?? "", "", ""]);
 	} catch (err) {
 		console.error("[sheets] Error registrando reporte de no conexión:", err);
 		return { ok: false, row: null };
@@ -513,22 +514,36 @@ export async function logNoConnectionReport(
 }
 
 /**
- * Escribe cuántos segundos tardó el TL en reaccionar a un reporte ya encolado, en la celda de
- * la columna G de su fila original en "pending_offline". Solo toca esa celda — nunca status ni
- * result (D/E) — así que no puede pisar lo que ya haya escrito el Monitor externo aunque este
- * update llegue después de que el Monitor procesó la fila.
+ * Escribe cuántos segundos tardó el TL en reaccionar a un reporte ya encolado y su nombre, en
+ * las celdas G:H de su fila original en "pending_offline". Solo toca esas dos celdas — nunca
+ * status ni result (D/E) — así que no puede pisar lo que ya haya escrito el Monitor externo
+ * aunque este update llegue después de que el Monitor procesó la fila.
  */
-export async function updatePendingOfflineReactionSeconds(
+export async function updatePendingOfflineReaction(
 	spreadsheetId: string,
 	rowNumber:     number,
 	seconds:       number,
+	tlName:        string,
 ): Promise<boolean> {
 	if (!SA_EMAIL || !SA_KEY || !spreadsheetId) return false;
 	try {
-		await updateNamedCell(spreadsheetId, OFFLINE_QUEUE_TAB, rowNumber, TL_REACTION_SECONDS_COL, String(seconds));
+		const token = await getAccessToken();
+		const startCol = colIndexToLetter(TL_REACTION_SECONDS_COL);
+		const endCol   = colIndexToLetter(TL_NAME_COL);
+		const range = encodeURIComponent(`'${OFFLINE_QUEUE_TAB}'!${startCol}${rowNumber}:${endCol}${rowNumber}`);
+		const res = await fetch(
+			`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=RAW`,
+			{
+				method:  "PUT",
+				headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+				body:    JSON.stringify({ values: [[String(seconds), tlName]] }),
+				signal:  AbortSignal.timeout(10_000),
+			},
+		);
+		if (!res.ok) throw new Error(`[sheets] Write error ${res.status}: ${(await res.text()).substring(0, 200)}`);
 		return true;
 	} catch (err) {
-		console.error("[sheets] Error actualizando segundos de reacción del TL:", err);
+		console.error("[sheets] Error actualizando reacción del TL:", err);
 		return false;
 	}
 }
