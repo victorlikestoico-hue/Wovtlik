@@ -1451,7 +1451,16 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 	try {
 		const queueReason = `${failureType}${lob ? ` — LOB ${lob}` : ""} (reportado en grupo de fallas)`;
 		const queued = await queueAgentOffline(email, queueReason, spreadsheetId, lob);
-		await markGroupFailureReportConfirmed(reportId, queued.ok, queued.row != null ? { spreadsheetId, row: queued.row } : null);
+		const confirmed = await markGroupFailureReportConfirmed(reportId, queued.ok, queued.row != null ? { spreadsheetId, row: queued.row } : null);
+		// El TL puede reaccionar en el ratito entre insertGroupFailureReport y este confirm —
+		// en ese caso markTlReactionForOthers ya corrió pero no encontró sheet_row, así que la
+		// reacción quedó guardada solo en Postgres. Se completa acá si fue el caso.
+		if (queued.row != null && confirmed.tl_reacted_at && confirmed.tl_reacted_by) {
+			const seconds = Math.round((confirmed.tl_reacted_at.getTime() - confirmed.created_at.getTime()) / 1000);
+			updatePendingOfflineReaction(spreadsheetId, queued.row, seconds, confirmed.tl_reacted_by).catch((err) =>
+				console.error("[fallas-group] Error completando reacción de TL adelantada:", err),
+			);
+		}
 		if (queued.ok && lastMsgKey) {
 			await sendViaGlobalSock(
 				lastMsgKey.remoteJid as string,
@@ -1614,7 +1623,15 @@ async function processCannotConnectReport(phone: string, senderName: string, las
 
 	try {
 		const logged = await logNoConnectionReport(email, motivo, spreadsheetId, lob);
-		await markGroupFailureReportConfirmed(reportId, logged.ok, logged.row != null ? { spreadsheetId, row: logged.row } : null);
+		const confirmed = await markGroupFailureReportConfirmed(reportId, logged.ok, logged.row != null ? { spreadsheetId, row: logged.row } : null);
+		// Mismo caso de carrera que en processFallasGroupReport: si el TL ya reaccionó antes de
+		// que esta fila terminara de escribirse en el sheet, se completa recién acá.
+		if (logged.row != null && confirmed.tl_reacted_at && confirmed.tl_reacted_by) {
+			const seconds = Math.round((confirmed.tl_reacted_at.getTime() - confirmed.created_at.getTime()) / 1000);
+			updatePendingOfflineReaction(spreadsheetId, logged.row, seconds, confirmed.tl_reacted_by).catch((err) =>
+				console.error("[fallas-group] Error completando reacción de TL adelantada:", err),
+			);
+		}
 		if (logged.ok && lastMsgKey && globalSock && isSocketConnected) {
 			await sendViaGlobalSock(
 				lastMsgKey.remoteJid as string,

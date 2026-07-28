@@ -1115,18 +1115,35 @@ export async function insertGroupFailureReport(input: {
 	return res.rows[0];
 }
 
+export interface ConfirmedGroupFailureReportRow {
+	id: number;
+	tl_reacted_at: Date | null;
+	tl_reacted_by: string | null;
+	created_at: Date;
+}
+
+/**
+ * Marca el reporte como confirmado/encolado y guarda dónde quedó su fila en el sheet. Devuelve
+ * tl_reacted_at/tl_reacted_by tal como quedaron después de este UPDATE — si el TL ya había
+ * reaccionado ANTES de que esta fila terminara de escribirse en el sheet (carrera entre
+ * markTlReactionForOthers y este confirm), acá vienen ya seteados y el caller es responsable de
+ * completar recién ahora la columna de reacción en el sheet, porque markTlReactionForOthers no
+ * pudo hacerlo en su momento (sheet_row todavía era NULL).
+ */
 export async function markGroupFailureReportConfirmed(
 	id: number,
 	queuedOffline: boolean,
 	sheetLocation?: { spreadsheetId: string; row: number } | null,
-): Promise<void> {
+): Promise<ConfirmedGroupFailureReportRow> {
 	await ensureSchemaInitialized();
-	await pool.query(
+	const res = await pool.query<ConfirmedGroupFailureReportRow>(
 		`UPDATE group_failure_reports
 		 SET confirmed = TRUE, queued_offline = $2, sheet_row = $3, sheet_spreadsheet_id = $4
-		 WHERE id = $1`,
+		 WHERE id = $1
+		 RETURNING id, tl_reacted_at, tl_reacted_by, created_at`,
 		[id, queuedOffline, sheetLocation?.row ?? null, sheetLocation?.spreadsheetId ?? null],
 	);
+	return res.rows[0];
 }
 
 /** Marca como resuelto el último reporte sin resolver de ese teléfono (ej. "ya llegó la luz"). */
