@@ -182,6 +182,12 @@ const OFFLINE_KEYWORDS = [
 	"no me deja entrar al hc", "hc no abre", "se traba el hc", "se traba hc",
 	"hc caído", "hc caido", "falla el hc", "falla en hc", "falla en el hc",
 	"problemas con hc", "problemas con el hc", "el hc se cayó", "el hc se cayo",
+	// Falla del aplicativo Hero (mismo patrón que HC)
+	"hero no funciona", "hero no carga", "hero lento", "hero lenta", "lentitud en hero",
+	"el hero no funciona", "el hero no carga", "se cae el hero", "se cae hero",
+	"no me deja entrar al hero", "hero no abre", "se traba el hero", "se traba hero",
+	"hero caído", "hero caido", "falla el hero", "falla en hero", "falla en el hero",
+	"problemas con hero", "problemas con el hero", "el hero se cayó", "el hero se cayo",
 	// Frases cortas de internet/señal que antes no matcheaban
 	"sin internet", "no tengo internet",
 	"tengo problemas de internet", "internet malo", "problemas de internet",
@@ -241,6 +247,7 @@ const NEAR_MISS_SIGNALS: Record<string, string[]> = {
 		"luz", "internet", "señal", "energia", "energía", "apagon", "apagón",
 		"computador", "computadora", "falla electrica", "falla eléctrica", "hc lent",
 		"hc no", "hc se", "hc cai", "se cayo el hc", "se cayó el hc",
+		"hero no", "hero se", "hero cai", "se cayo el hero", "se cayó el hero",
 	],
 	absence: ["ausente", "ausencia", "falta"],
 	schedule: ["mi turno", "mis turnos", "horario"],
@@ -638,6 +645,8 @@ function classifyFailureReason(text: string): string {
 		|| lower.includes("actualiz")) return "PC dañada o actualizando";
 	if (lower.includes(" hc") || lower.includes("hc ") || lower.includes("hc\n") || lower === "hc"
 		|| lower.startsWith("hc ")) return "Aplicativo HC no funciona";
+	if (lower.includes(" hero") || lower.includes("hero ") || lower.includes("hero\n") || lower === "hero"
+		|| lower.startsWith("hero ")) return "Aplicativo Hero no funciona";
 	if (lower.includes("internet") || lower.includes("señal") || lower.includes("conexi")
 		|| lower.includes("red ") || lower.includes("caí") || lower.includes("cai")) return "Internet / conexión caída";
 	return "Falla de conectividad";

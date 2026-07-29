@@ -14,7 +14,7 @@ const FALLAS_TEMPLATE_MESSAGE = [
 	"1️⃣ Correo con _ndo.ext → ej: victor.garces_ndo.ext@pedidosya.com",
 	"2️⃣ Motivo → luz, internet o HC",
 	"3️⃣ Tu LOB",
-	"4️⃣ Si ya llenaste el formulario de desconexión",
+	"4️⃣ Si ya llenaste el formulario de desconexión ya no necesitamos la parte del formulario",
 	"",
 	"_Aplica por falla de luz, internet o HC._",
 	"",
