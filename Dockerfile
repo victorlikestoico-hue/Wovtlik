@@ -13,6 +13,7 @@ ENV NODE_ENV=production
 
 # Copiamos dependencias y configuramos entorno
 COPY package*.json ./
+COPY patches ./patches
 # tsx y concurrently van en dependencies, por lo que se instalarán aquí
 RUN npm ci --omit=dev
 
