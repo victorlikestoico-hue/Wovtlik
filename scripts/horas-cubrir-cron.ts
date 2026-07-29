@@ -67,11 +67,28 @@ function isSlotStillAvailable(entry: HoraCubrirEntry, todayUY: string, nowMinUY:
 	return range.end > nowMinUY;
 }
 
+const DIAS_SEMANA_ES = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+
+/**
+ * Nombre del día de la semana en español a partir de una fecha ya normalizada (YYYY-MM-DD).
+ * El día de la semana lo calculamos acá (determinístico) y se lo pasamos resuelto al LLM —
+ * si se lo dejamos calcular a él a partir de "DD/MM/YYYY" suele equivocarse (ej. dijo
+ * "Viernes 01/08" para una fecha que en realidad caía sábado).
+ */
+function nombreDiaSemana(fechaNorm: string): string | null {
+	const m = fechaNorm.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+	if (!m) return null;
+	const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+	return DIAS_SEMANA_ES[d.getUTCDay()];
+}
+
 /** Arma el resumen "- LOB: Xh HHEE — horarios | Yh normales — horarios", una línea por LOB. */
 function buildResumenByLob(entries: HoraCubrirEntry[], today: string): string {
 	const fmtSlot = (s: HoraCubrirEntry) => {
-		const isToday = normalizeFecha(s.fecha) === today;
-		return `${s.fecha} ${s.horario}${isToday ? " (HOY)" : ""}`;
+		const fechaNorm = normalizeFecha(s.fecha);
+		const isToday = fechaNorm === today;
+		const dia = nombreDiaSemana(fechaNorm);
+		return `${dia ? dia + " " : ""}${s.fecha} ${s.horario}${isToday ? " (HOY)" : ""}`;
 	};
 
 	const byLob = new Map<string, { hhee: HoraCubrirEntry[]; normal: HoraCubrirEntry[] }>();
@@ -102,6 +119,7 @@ function buildFullPrompt(entries: HoraCubrirEntry[], today: string): string {
 	return [
 		"Sos el asistente que anuncia horas disponibles para cubrir, en un grupo de WhatsApp de agentes de Customer Success que trabajan 100% desde casa (home office).",
 		`Hoy es ${today} (hora Uruguay — los horarios de la lista están en esa zona horaria). A continuación tenés, por LOB, las horas sin cubrir ya separadas en dos grupos: HHEE (pagan un plus) y normales (NO pagan extra). Los turnos marcados con "(HOY)" son del día de hoy y los que ya pasaron fueron descartados de la lista.`,
+		"CRÍTICO: cada turno de la lista ya viene con el nombre del día de la semana correcto delante de la fecha (ej. \"Sábado 01/08/2026\"). Usá ese nombre TAL CUAL, textual — NUNCA calcules, infieras ni corrijas vos el día de la semana a partir de la fecha, así evitamos anunciar un día equivocado.",
 		"CRÍTICO: nunca sumes, mezcles ni generalices las horas HHEE con las normales de un mismo LOB ni de LOBs distintos — son conceptos de pago distintos y deben quedar diferenciados en el mensaje.",
 		"No recalcules los totales de horas: usá tal cual los números que te paso, no los reinterpretes ni los redondees.",
 		"CRÍTICO: mostrá TODAS las horas de la lista (de hoy y de otros días), pero priorizá y resaltá primero, con más énfasis, las que son de HOY (son las más urgentes de cubrir). Las de otros días van después, en un tono más secundario.",
@@ -133,6 +151,7 @@ function buildReminderPrompt(entries: HoraCubrirEntry[], today: string): string 
 	return [
 		"Sos parte del equipo de operación de Customer Success (agentes 100% home office) y ya se mandó, más temprano hoy, el anuncio formal y completo con el listado detallado de horas disponibles para cubrir.",
 		`Hoy es ${today} (hora Uruguay). A continuación tenés, por LOB, las horas que TODAVÍA siguen sin cubrirse (ya se descartaron las que pasaron o se llenaron).`,
+		"CRÍTICO: cada turno de la lista ya viene con el nombre del día de la semana correcto delante de la fecha (ej. \"Sábado 01/08/2026\"). Usá ese nombre TAL CUAL, textual — NUNCA calcules, infieras ni corrijas vos el día de la semana a partir de la fecha.",
 		"Este es un recordatorio, no el anuncio completo: NO repitas el listado detallado turno por turno ni menciones todos los LOBs — elegí como máximo 1 o 2 franjas que sean las más urgentes o llamativas (priorizá las de HOY) y usalas de gancho.",
 		"Escribí UN mensaje CORTO para WhatsApp (2 a 4 líneas), como si lo tipeara una persona del equipo recordando por las suyas que todavía hay horas libres — no como una comunicación oficial repetida. Tono cercano, informal, con gracia y buena onda, pero profesional (sin caer en chiste forzado ni informalidad excesiva).",
 		"Elegí al azar, para esta tanda, UN acento/sabor regional latinoamericano (colombiano paisa, costeño, mexicano, rioplatense argentino-uruguayo, caribeño, chileno, etc.) e imprimile ese estilo con alguna expresión típica breve. Que sea liviano y entendible para todo el equipo, no jerga cerrada.",
