@@ -12,6 +12,7 @@ import { startFallasTemplateCron } from "./fallas-template-cron.ts";
 import { startHorasCubrirCron } from "./horas-cubrir-cron.ts";
 import { startFormBroadcastCron } from "./form-broadcast-cron.ts";
 import { startRecordatoriosDispatchCron } from "./recordatorios-dispatch-cron.ts";
+import { startTlCoverageCron } from "./tl-coverage-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -42,6 +43,9 @@ async function main() {
 
 	// Disparo del workflow de recordatorios-turnos cada 5 min (el cron nativo de GH Actions no es confiable)
 	startRecordatoriosDispatchCron();
+
+	// Anuncio diario de cobertura propia en el grupo de desconexiones, a la hora configurada en Ajustes
+	startTlCoverageCron();
 
 	// Loop de polling para la desconexión / reinicio manual controlado desde el frontend
 	setInterval(async () => {

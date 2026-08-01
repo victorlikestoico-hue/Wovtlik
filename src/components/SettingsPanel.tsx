@@ -632,6 +632,102 @@ export default function SettingsPanel() {
 					</p>
 				</div>
 
+				{/* Grupo: Cobertura propia en el grupo de desconexiones */}
+				<div className="bg-surface/80 border border-outline-variant/20 p-5 rounded-2xl space-y-4">
+					<div className="flex items-center justify-between">
+						<h3 className="text-xs font-bold text-on-surface uppercase tracking-wider flex items-center gap-2">
+							<span>🛠️</span> Mi Cobertura en el Grupo de Desconexiones
+						</h3>
+						<div className="flex items-center gap-2">
+							<input
+								type="checkbox"
+								id="tl_coverage_enabled"
+								checked={!!settings.tl_coverage_enabled}
+								onChange={(e) => handleChange("tl_coverage_enabled", e.target.checked)}
+								className="size-4 rounded bg-surface-container-low border border-outline-variant/30 text-primary focus:ring-0"
+							/>
+							<label htmlFor="tl_coverage_enabled" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider select-none cursor-pointer">
+								Activo
+							</label>
+						</div>
+					</div>
+					<p className="text-[9px] text-on-surface-variant/80">
+						Todos los días, a la hora de inicio, el bot manda el aviso de cobertura al grupo de desconexiones y te deja anotado como TL en turno para esos LOB hasta la hora de fin (así "quién es el TL de X" te arroba a vos). Desactivá el toggle los días que no cubrís.
+					</p>
+					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="tl_coverage_start" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
+								Hora de inicio (UY)
+							</label>
+							<input
+								id="tl_coverage_start"
+								type="time"
+								value={settings.tl_coverage_start || ""}
+								onChange={(e) => handleChange("tl_coverage_start", e.target.value)}
+								className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all"
+							/>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="tl_coverage_end" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
+								Hora de fin (UY)
+							</label>
+							<input
+								id="tl_coverage_end"
+								type="time"
+								value={settings.tl_coverage_end || ""}
+								onChange={(e) => handleChange("tl_coverage_end", e.target.value)}
+								className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all"
+							/>
+						</div>
+					</div>
+					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="tl_coverage_phone" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
+								Tu número de WhatsApp (con código de país, sin +)
+							</label>
+							<input
+								id="tl_coverage_phone"
+								type="text"
+								value={settings.tl_coverage_phone || ""}
+								onChange={(e) => handleChange("tl_coverage_phone", e.target.value)}
+								placeholder="Ej: 573001234567"
+								className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all font-mono"
+							/>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							<label htmlFor="tl_coverage_name" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
+								Tu nombre (para mostrar)
+							</label>
+							<input
+								id="tl_coverage_name"
+								type="text"
+								value={settings.tl_coverage_name || ""}
+								onChange={(e) => handleChange("tl_coverage_name", e.target.value)}
+								placeholder="Ej: Victor"
+								className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all"
+							/>
+						</div>
+					</div>
+					<div className="flex flex-col gap-1.5">
+						<label htmlFor="tl_coverage_lobs" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
+							LOBs que cubrís (separados por coma)
+						</label>
+						<input
+							id="tl_coverage_lobs"
+							type="text"
+							value={settings.tl_coverage_lobs ?? "aj, rv, pdi, fr, lg, out, ato"}
+							onChange={(e) => handleChange("tl_coverage_lobs", e.target.value)}
+							placeholder="aj, rv, pdi, fr, lg, out, ato"
+							className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all font-mono"
+						/>
+					</div>
+					{settings.tl_coverage_start && settings.tl_coverage_end && (
+						<p className="text-[9px] text-on-surface-variant/60 italic">
+							Mensaje: "Hola equipo, los acompaño por aquí desde ahora {settings.tl_coverage_start} hasta las {settings.tl_coverage_end} UY con las desconexiones y fallos de internet a los equipos {(settings.tl_coverage_lobs || "aj, rv, pdi, fr, lg, out, ato").split(",").map((l: string) => l.trim().toUpperCase()).filter(Boolean).join(", ")}"
+						</p>
+					)}
+				</div>
+
 				{/* Grupo: Perfiles de Agentes */}
 				<AgentProfilesSection />
 
