@@ -6,15 +6,15 @@ const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
 const FALLAS_TEMPLATE_COOLDOWN_KEY = "bot:fallas_template_last_sent";
 // Mismo período que el intervalo: actúa como traba para no duplicar el envío si el
-// bot se reinicia varias veces dentro de la ventana de 1h (deploys, crashes, etc.).
-const FALLAS_TEMPLATE_COOLDOWN_SECONDS = 60 * 60;
+// bot se reinicia varias veces dentro de la ventana de 4h (deploys, crashes, etc.).
+// Bajado de 1h a 4h: los agentes ya se saben el flujo, no hace falta insistir tan seguido.
+const FALLAS_TEMPLATE_COOLDOWN_SECONDS = 4 * 60 * 60;
 
 const FALLAS_TEMPLATE_MESSAGE = [
 	"📋 *Cómo reportar una falla:*",
 	"1️⃣ Correo con _ndo.ext → ej: victor.garces_ndo.ext@pedidosya.com",
 	"2️⃣ Motivo → luz, internet o HC",
 	"3️⃣ Tu LOB",
-	"4️⃣ Si ya llenaste el formulario de desconexión ya no necesitamos la parte del formulario",
 	"",
 	"_Aplica por falla de luz, internet o HC._",
 	"",
@@ -23,7 +23,7 @@ const FALLAS_TEMPLATE_MESSAGE = [
 
 // Reintento corto cuando el socket todavía no terminó de autenticarse (recién arrancado el proceso).
 // Sin esto, el primer tick tras cada reinicio choca con authState.creds.me aún sin definir
-// dentro de Baileys y el recordatorio nunca llega a enviarse hasta el próximo ciclo de 2hs.
+// dentro de Baileys y el recordatorio nunca llega a enviarse hasta el próximo ciclo de 4hs.
 const FALLAS_TEMPLATE_NOT_READY_RETRY_MS = 30_000;
 
 export async function runFallasTemplateCronOnce(): Promise<"sent" | "skipped" | "not_ready" | "outside_window" | "error"> {
@@ -53,7 +53,7 @@ export async function runFallasTemplateCronOnce(): Promise<"sent" | "skipped" | 
 }
 
 export function startFallasTemplateCron(): void {
-	console.log("[fallas-template-cron] Iniciando loop del recordatorio de reporte de fallas (cada hora en punto, 6am-12am Colombia)...");
+	console.log("[fallas-template-cron] Iniciando loop del recordatorio de reporte de fallas (cada 4 horas, 6am-12am Colombia)...");
 	const tick = async () => {
 		const result = await runFallasTemplateCronOnce();
 		const delay = result === "not_ready" ? FALLAS_TEMPLATE_NOT_READY_RETRY_MS : msUntilNextTopOfHour();

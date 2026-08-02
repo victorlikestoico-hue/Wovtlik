@@ -32,7 +32,7 @@ async function main() {
 	// Recordatorios de citas agendadas (cliente, agente y Telegram)
 	startAppointmentsCron();
 
-	// Recordatorio cada 2hs en el grupo de fallas de qué datos enviar (correo, motivo, formulario)
+	// Recordatorio cada 4hs en el grupo de fallas de qué datos enviar (correo, motivo, LOB)
 	startFallasTemplateCron();
 
 	// Anuncio cada 1h en el grupo "Anuncios Horas CS" de los LOBs con horas extra sin cubrir
