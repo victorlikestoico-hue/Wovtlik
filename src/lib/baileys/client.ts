@@ -2445,6 +2445,12 @@ function outboxMimeType(item: any) {
 
 function outboxSendPayload(item: any) {
 	const mediaType = item.media_type ?? "text";
+	// Los stickers viajan inline en metadata (base64) en vez de por archivo en disco: mediaDir
+	// no está en el volumen persistente, así que un sticker en disco no sobreviviría un redeploy.
+	const stickerBase64 = outboxMetadata(item).stickerBase64;
+	if (mediaType === "image" && typeof stickerBase64 === "string" && stickerBase64) {
+		return { sticker: Buffer.from(stickerBase64, "base64") };
+	}
 	if (mediaType === "image" || mediaType === "audio") {
 		const mediaPath = mediaPathFromUrl(item.media_url);
 		if (!mediaPath || !fs.existsSync(mediaPath)) {
