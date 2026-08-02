@@ -13,6 +13,23 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 
+interface DaySchedule {
+	enabled?: boolean;
+	start?: string;
+	end?: string;
+}
+
+// Mismas keys que usa scripts/tl-coverage-cron.ts para leer el horario del día en curso.
+const WEEKDAYS: Array<{ key: string; label: string }> = [
+	{ key: "mon", label: "Lunes" },
+	{ key: "tue", label: "Martes" },
+	{ key: "wed", label: "Miércoles" },
+	{ key: "thu", label: "Jueves" },
+	{ key: "fri", label: "Viernes" },
+	{ key: "sat", label: "Sábado" },
+	{ key: "sun", label: "Domingo" },
+];
+
 interface CustomSelectProps<T> {
 	value: T;
 	onChange: (value: T) => void;
@@ -652,33 +669,46 @@ export default function SettingsPanel() {
 						</div>
 					</div>
 					<p className="text-[9px] text-on-surface-variant/80">
-						Todos los días, a la hora de inicio, el bot manda el aviso de cobertura al grupo de desconexiones y te deja anotado como TL en turno para esos LOB hasta la hora de fin (así "quién es el TL de X" te arroba a vos). Desactivá el toggle los días que no cubrís.
+						El horario cambia según el día, así que configurá inicio y fin para cada uno. A la hora de inicio del día que corresponda, el bot manda el aviso de cobertura al grupo de desconexiones y te deja anotado como TL en turno para esos LOB hasta la hora de fin (así "quién es el TL de X" te arroba a vos). Desmarcá el día para que ese día no se mande nada.
 					</p>
-					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-						<div className="flex flex-col gap-1.5">
-							<label htmlFor="tl_coverage_start" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
-								Hora de inicio (UY)
-							</label>
-							<input
-								id="tl_coverage_start"
-								type="time"
-								value={settings.tl_coverage_start || ""}
-								onChange={(e) => handleChange("tl_coverage_start", e.target.value)}
-								className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all"
-							/>
-						</div>
-						<div className="flex flex-col gap-1.5">
-							<label htmlFor="tl_coverage_end" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
-								Hora de fin (UY)
-							</label>
-							<input
-								id="tl_coverage_end"
-								type="time"
-								value={settings.tl_coverage_end || ""}
-								onChange={(e) => handleChange("tl_coverage_end", e.target.value)}
-								className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all"
-							/>
-						</div>
+					<div className="rounded-xl border border-outline-variant/20 overflow-hidden divide-y divide-outline-variant/15">
+						{WEEKDAYS.map(({ key, label }) => {
+							const daySchedule = (settings.tl_coverage_schedule?.[key] || {}) as DaySchedule;
+							const updateDay = (patch: Partial<DaySchedule>) => {
+								handleChange("tl_coverage_schedule", {
+									...(settings.tl_coverage_schedule || {}),
+									[key]: { ...daySchedule, ...patch },
+								});
+							};
+							return (
+								<div key={key} className="flex items-center gap-3 px-3 py-2 bg-surface-container-low/50">
+									<label className="flex items-center gap-2 w-24 shrink-0 cursor-pointer select-none">
+										<input
+											type="checkbox"
+											checked={!!daySchedule.enabled}
+											onChange={(e) => updateDay({ enabled: e.target.checked })}
+											className="size-4 rounded bg-surface-container-low border border-outline-variant/30 text-primary focus:ring-0"
+										/>
+										<span className="text-[10px] font-bold text-on-surface">{label}</span>
+									</label>
+									<input
+										type="time"
+										value={daySchedule.start || ""}
+										disabled={!daySchedule.enabled}
+										onChange={(e) => updateDay({ start: e.target.value })}
+										className="px-3 py-1.5 bg-surface-container-low border border-outline-variant/30 rounded-lg text-xs text-on-surface focus:outline-none focus:border-primary disabled:opacity-40"
+									/>
+									<span className="text-[9px] text-on-surface-variant/60">a</span>
+									<input
+										type="time"
+										value={daySchedule.end || ""}
+										disabled={!daySchedule.enabled}
+										onChange={(e) => updateDay({ end: e.target.value })}
+										className="px-3 py-1.5 bg-surface-container-low border border-outline-variant/30 rounded-lg text-xs text-on-surface focus:outline-none focus:border-primary disabled:opacity-40"
+									/>
+								</div>
+							);
+						})}
 					</div>
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div className="flex flex-col gap-1.5">
@@ -721,11 +751,9 @@ export default function SettingsPanel() {
 							className="px-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-xl text-xs text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all font-mono"
 						/>
 					</div>
-					{settings.tl_coverage_start && settings.tl_coverage_end && (
-						<p className="text-[9px] text-on-surface-variant/60 italic">
-							Mensaje: "Hola equipo, los acompaño por aquí desde ahora {settings.tl_coverage_start} hasta las {settings.tl_coverage_end} UY con las desconexiones y fallos de internet a los equipos {(settings.tl_coverage_lobs || "aj, rv, pdi, fr, lg, out, ato").split(",").map((l: string) => l.trim().toUpperCase()).filter(Boolean).join(", ")}"
-						</p>
-					)}
+					<p className="text-[9px] text-on-surface-variant/60 italic">
+						Ejemplo del mensaje que se manda (con el horario del día que corresponda): "Hola equipo, los acompaño por aquí desde ahora HH:mm hasta las HH:mm UY con las desconexiones y fallos de internet a los equipos {(settings.tl_coverage_lobs || "aj, rv, pdi, fr, lg, out, ato").split(",").map((l: string) => l.trim().toUpperCase()).filter(Boolean).join(", ")}"
+					</p>
 				</div>
 
 				{/* Grupo: Perfiles de Agentes */}

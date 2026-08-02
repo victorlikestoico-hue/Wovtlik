@@ -30,6 +30,18 @@ function currentHHmmUruguay(): string {
 	return `${hour}:${minute}`;
 }
 
+// Índice de Date.getDay() (0=domingo) → key del día, mismas keys que usa SettingsPanel.tsx
+// para guardar tl_coverage_schedule.
+const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+
+/** Key del día actual ("mon".."sun") calculada en hora Uruguay, no en la del server. */
+function currentWeekdayKeyUruguay(): string {
+	const weekday = new Intl.DateTimeFormat("en-US", { timeZone: URUGUAY_TZ, weekday: "short" })
+		.format(new Date())
+		.toLowerCase(); // "mon", "tue", "wed", "thu", "fri", "sat", "sun"
+	return WEEKDAY_KEYS.includes(weekday as any) ? weekday : WEEKDAY_KEYS[new Date().getDay()];
+}
+
 /** Minutos transcurridos desde medianoche (hora Uruguay) para un "HH:mm". */
 function toMinutes(hhmm: string): number | null {
 	const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
@@ -71,8 +83,13 @@ export async function runTlCoverageCronOnce(): Promise<
 		const settings = await getSettings();
 		if (!settings.tl_coverage_enabled) return "disabled";
 
-		const start = (settings.tl_coverage_start as string) || "";
-		const end = (settings.tl_coverage_end as string) || "";
+		const schedule = (settings.tl_coverage_schedule as Record<string, { enabled?: boolean; start?: string; end?: string }>) || {};
+		const todayKey = currentWeekdayKeyUruguay();
+		const daySchedule = schedule[todayKey];
+		if (!daySchedule?.enabled) return "disabled";
+
+		const start = daySchedule.start || "";
+		const end = daySchedule.end || "";
 		const phone = ((settings.tl_coverage_phone as string) || "").replace(/\D/g, "");
 		const lobsRaw = (settings.tl_coverage_lobs as string) || "";
 		const lobs = lobsRaw.split(",").map((l) => l.trim().toLowerCase()).filter(Boolean);
