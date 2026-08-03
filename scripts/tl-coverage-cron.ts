@@ -110,6 +110,22 @@ export async function runTlCoverageCronOnce(): Promise<
 		const message = buildCoverageMessage(start, end, lobs);
 		await sendViaGlobalSock(FALLAS_GROUP_JID, { text: message }, { kind: "cron" });
 
+		// Sticker opcional configurado en Ajustes: viaja como base64 (no como archivo en disco)
+		// por la misma razón que el outbox lo maneja así — mediaDir no está en el volumen
+		// persistente de Railway. Si falla, no debe tumbar el resto del tick (el texto ya salió).
+		const stickerBase64 = (settings.tl_coverage_sticker_base64 as string) || "";
+		if (stickerBase64) {
+			try {
+				await sendViaGlobalSock(
+					FALLAS_GROUP_JID,
+					{ sticker: Buffer.from(stickerBase64, "base64") },
+					{ kind: "cron" },
+				);
+			} catch (err) {
+				console.error("[tl-coverage-cron] Error mandando el sticker de cobertura:", err);
+			}
+		}
+
 		const name = (settings.tl_coverage_name as string) || phone;
 		const jid = `${phone}@s.whatsapp.net`;
 		const ttlSeconds = computeTtlSeconds(end);

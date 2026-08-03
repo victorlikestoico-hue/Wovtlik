@@ -754,6 +754,50 @@ export default function SettingsPanel() {
 					<p className="text-[9px] text-on-surface-variant/60 italic">
 						Ejemplo del mensaje que se manda (con el horario del día que corresponda): "Hola equipo, los acompaño por aquí desde ahora HH:mm hasta las HH:mm UY con las desconexiones y fallos de internet a los equipos {(settings.tl_coverage_lobs || "aj, rv, pdi, fr, lg, out, ato").split(",").map((l: string) => l.trim().toUpperCase()).filter(Boolean).join(", ")}"
 					</p>
+					<div className="flex flex-col gap-1.5">
+						<label htmlFor="tl_coverage_sticker" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">
+							Sticker que acompaña el aviso (opcional, .webp)
+						</label>
+						<div className="flex items-center gap-3">
+							{settings.tl_coverage_sticker_base64 && (
+								<img
+									src={`data:image/webp;base64,${settings.tl_coverage_sticker_base64}`}
+									alt="Sticker de cobertura"
+									className="size-14 rounded-lg border border-outline-variant/30 bg-surface-container-low object-contain"
+								/>
+							)}
+							<input
+								id="tl_coverage_sticker"
+								type="file"
+								accept="image/webp"
+								onChange={(e) => {
+									const file = e.target.files?.[0];
+									if (!file) return;
+									const reader = new FileReader();
+									reader.onload = () => {
+										const result = reader.result as string;
+										const base64 = result.split(",")[1] || "";
+										handleChange("tl_coverage_sticker_base64", base64);
+									};
+									reader.readAsDataURL(file);
+									e.target.value = "";
+								}}
+								className="text-[10px] text-on-surface-variant file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-primary/10 file:text-primary file:text-[10px] file:font-bold file:uppercase file:tracking-wider file:cursor-pointer hover:file:bg-primary/20"
+							/>
+							{settings.tl_coverage_sticker_base64 && (
+								<button
+									type="button"
+									onClick={() => handleChange("tl_coverage_sticker_base64", "")}
+									className="text-[9px] font-bold text-error uppercase tracking-wider hover:underline"
+								>
+									Quitar
+								</button>
+							)}
+						</div>
+						<p className="text-[9px] text-on-surface-variant/60">
+							Si hay un sticker cargado, se manda justo después del mensaje de texto. Tiene que ser .webp (formato de sticker de WhatsApp).
+						</p>
+					</div>
 				</div>
 
 				{/* Grupo: Perfiles de Agentes */}
