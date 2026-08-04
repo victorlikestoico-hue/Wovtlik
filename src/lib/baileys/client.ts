@@ -188,6 +188,10 @@ const OFFLINE_KEYWORDS = [
 	"no me deja entrar al hero", "hero no abre", "se traba el hero", "se traba hero",
 	"hero caído", "hero caido", "falla el hero", "falla en hero", "falla en el hero",
 	"problemas con hero", "problemas con el hero", "el hero se cayó", "el hero se cayo",
+	// Pantalla/aplicativo "en blanco" — suelto porque agentes lo dicen sobre distintos
+	// nombres (Hero, Hero Care, HC) y a veces con palabras en el medio (ej. "Hero care
+	// se queda en blanco"), así que un keyword pegado a "hero"/"hc" no lo cubre.
+	"se queda en blanco", "queda en blanco", "pantalla en blanco", "pantalla blanca",
 	// Frases cortas de internet/señal que antes no matcheaban
 	"sin internet", "no tengo internet",
 	"tengo problemas de internet", "internet malo", "problemas de internet",
@@ -235,6 +239,7 @@ const ABSENCE_KEYWORDS = [
 	"quitar falta", "eliminar falta", "borrar falta", "me marcaron falta",
 	"sacar mi falta", "borrar mi falta", "eliminar mi falta",
 	"tengo ausente", "me aparece ausente", "me sale ausente",
+	"tengo marcado ausente", "me quedó marcado ausente", "me quedo marcado ausente",
 ];
 
 // ── Detección de "casi-aciertos" ────────────────────────────────────────────
@@ -494,7 +499,11 @@ function matchesAbsenceIntent(msgLower: string): boolean {
 	// corregir es irregular (corrijo/corrigen/corregir) — corri[jg] cubre las formas con
 	// raíz cambiada y correg cubre el infinitivo y las formas regulares (corregir, corregí).
 	const hasRemovalVerb = /\b(elimin[a-záéíóúñü]{0,6}|quit[a-záéíóúñü]{0,6}|borr[a-záéíóúñü]{0,6}|sac[a-záéíóúñü]{0,6}|remov[a-záéíóúñü]{0,6}|corri[jg][a-záéíóúñü]{0,6}|correg[a-záéíóúñü]{0,6})\b/.test(msgLower);
-	return hasAbsenceNoun && hasRemovalVerb;
+	// El agente casi nunca pide explícitamente "sacar/corregir" la ausencia — a veces solo
+	// cuenta que sí asistió/entró a horario (disputando la marca sin usar un verbo de
+	// remoción), ej. "tengo marcado ausente, asistí a turno a la hora".
+	const hasOnTimeClaim = /\b(a\s+la\s+hora|a\s+tiempo|puntual)\b/.test(msgLower);
+	return hasAbsenceNoun && (hasRemovalVerb || hasOnTimeClaim);
 }
 
 // Frases de "me conecté tarde" en el grupo de fallas — el agente casi nunca dice "ausencia" o
