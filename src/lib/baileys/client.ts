@@ -1663,13 +1663,13 @@ async function processCannotConnectReport(phone: string, senderName: string, las
 }
 
 /**
- * Marca que el TL reaccionó (texto o reacción de WhatsApp) y, para cada reporte que haya
- * quedado marcado, actualiza los segundos transcurridos en su fila del sheet "pending_offline".
- * Cualquier mensaje o reacción de alguien distinto al agente que reportó cuenta como que
- * "reaccionó" a sus reportes pendientes — en la práctica el único que responde a una
- * desconexión acá es el TL en turno. Los mensajes/reacciones que manda el propio bot (fromMe)
- * nunca llegan a esta función (ver el filtro del listener más abajo), así que nunca se cuentan
- * como si el "TL" fuera el bot.
+ * Marca que el TL reaccionó (reacción de WhatsApp) y, para cada reporte que haya quedado
+ * marcado, actualiza los segundos transcurridos en su fila del sheet "pending_offline".
+ * Solo cuenta la reacción de WhatsApp (👍, ✅, etc.), no mensajes de texto: un mensaje de
+ * texto en el grupo puede ser otro agente reportando su propia falla, no el TL respondiendo
+ * a esta. Los mensajes/reacciones que manda el propio bot (fromMe) nunca llegan a esta
+ * función (ver el filtro del listener más abajo), así que nunca se cuentan como si el "TL"
+ * fuera el bot.
  */
 function markTlReactionAndUpdateSheet(phone: string, reactedByName: string): void {
 	markTlReactionForOthers(phone, new Date(), reactedByName)
@@ -1713,8 +1713,6 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// recordatorio — es puramente informativa, no un reporte real. Se ignora por completo:
 	// no debe acumularse, ni cargarse a Telegram/DB/sheet.
 	if (isReportTemplateMessage(text)) return;
-
-	markTlReactionAndUpdateSheet(phone, senderName);
 
 	// Anuncio de un TL cubriendo LOB puntuales ("los acompaño con CS y SM hasta las 14:00 UY") —
 	// se guarda por LOB individual para poder arrobar directo a ese TL cuando alguien pregunte
