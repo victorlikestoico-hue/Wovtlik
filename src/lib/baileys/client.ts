@@ -2101,6 +2101,12 @@ const turnState = createIoredisTurnState(redisClient as any);
 // "phone" would be the LID number (not the real phone), breaking profile lookups.
 const lidToPhoneJid = new Map<string, string>();
 
+// Último intento de assertSessions por JID (epoch ms) — evita releer/reforzar la misma sesión
+// decenas de veces seguidas cuando llega una ráfaga de mensajes fallidos del mismo remitente en
+// un solo upsert (cada assertSessions es una llamada de red a los servidores de WhatsApp).
+const lastSessionAssertAt = new Map<string, number>();
+const SESSION_ASSERT_COOLDOWN_MS = 30_000;
+
 // Instancia global del socket y controlador de reconexión
 export let globalSock: ReturnType<typeof makeWASocket> | null = null;
 // Verdadero sólo cuando el socket alcanzó el estado "open" (conexión establecida con WhatsApp).
@@ -2861,9 +2867,16 @@ export async function startWASocket() {
 				msg.message?.viewOnceMessageV2 ||
 				msg.message?.ephemeralMessage
 			);
-			const isDecryptionFailure = !msg.key.fromMe && !hasContent && (
-				!msg.messageStubType || 
-				msg.messageStubType === 0 || 
+			// OJO: en la práctica la gran mayoría de estos fallos llegan con fromMe:true — son ecos
+			// de mensajes propios rebotando desde otro dispositivo vinculado (multi-device) cuya
+			// sesión de Signal quedó desincronizada. La versión anterior de este chequeo exigía
+			// `!msg.key.fromMe`, así que nunca reparaba justo el caso que más aparece en producción
+			// (ver incidente 2026-08-05: cientos de "Bad MAC"/"MessageCounterError" con fromMe:true
+			// que nunca disparaban assertSessions). El fromMe del mensaje no cambia si la sesión de
+			// Signal de ese JID está rota, así que no debe excluirse acá.
+			const isDecryptionFailure = !hasContent && (
+				!msg.messageStubType ||
+				msg.messageStubType === 0 ||
 				msg.messageStubType === 1
 			);
 			console.log(
@@ -2877,7 +2890,12 @@ export async function startWASocket() {
 				const sessionJid = remoteJid.endsWith("@g.us")
 					? ((msg.key?.participantPn as string | undefined) ?? (msg.key?.participant as string | undefined))
 					: (remoteJid.endsWith("@s.whatsapp.net") || remoteJid.endsWith("@lid") ? remoteJid : undefined);
-				if (sessionJid) {
+				const lastAssertAt = sessionJid ? lastSessionAssertAt.get(sessionJid) ?? 0 : 0;
+				if (sessionJid && Date.now() - lastAssertAt < SESSION_ASSERT_COOLDOWN_MS) {
+					// Ya se reforzó esta sesión hace poco (ráfaga del mismo remitente en un solo
+					// upsert) — evita machacar la API de WhatsApp con asserts redundantes.
+				} else if (sessionJid) {
+					lastSessionAssertAt.set(sessionJid, Date.now());
 					console.warn(
 						`[bot-warning] Detectado posible error de desencriptación (Bad MAC) para el JID ${sessionJid}${remoteJid !== sessionJid ? ` (grupo ${remoteJid})` : ""}. Forzando recreación de sesión de Signal...`
 					);
