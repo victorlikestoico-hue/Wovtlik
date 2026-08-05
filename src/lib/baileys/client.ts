@@ -2848,25 +2848,19 @@ export async function startWASocket() {
 				`[bot-debug] Mensaje key: ${JSON.stringify(msg.key)}, pushName: ${msg.pushName}, timestamp: ${msg.messageTimestamp}`,
 			);
 
-			// Detectar si el mensaje no pudo ser desencriptado (Bad MAC / Ciphertext stub / MessageCounterError)
-			// Un mensaje ha fallado en desencriptarse si no tiene contenido legible de texto ni multimedia,
-			// no es de nosotros mismos, y no representa un stub/actualización del sistema de WhatsApp.
-			const hasContent = !!(
-				msg.message?.conversation ||
-				msg.message?.extendedTextMessage?.text ||
-				msg.message?.audioMessage ||
-				msg.message?.imageMessage ||
-				msg.message?.videoMessage ||
-				msg.message?.documentMessage ||
-				msg.message?.stickerMessage ||
-				msg.message?.contactMessage ||
-				msg.message?.contactsArrayMessage ||
-				msg.message?.locationMessage ||
-				msg.message?.liveLocationMessage ||
-				msg.message?.viewOnceMessage ||
-				msg.message?.viewOnceMessageV2 ||
-				msg.message?.ephemeralMessage
-			);
+			// Detectar si el mensaje no pudo ser desencriptado (Bad MAC / Ciphertext stub / MessageCounterError).
+			// No se usa una whitelist de tipos "conocidos" (texto/audio/imagen/etc.) porque quedaba
+			// corta: mensajes legítimos como reactionMessage, encReactionMessage, protocolMessage o
+			// secretEncryptedMessage (voto de encuesta) no estaban en la lista y se marcaban como
+			// fallo de desencriptación, disparando assertSessions sobre sesiones sanas (visto en
+			// producción tras el fix de fromMe: ~30 falsos positivos, todos reacciones/protocolo).
+			// Baileys solo deja `.message` vacío (o con únicamente `messageContextInfo`, que es
+			// metadata, no contenido) cuando la desencriptación realmente falló — cualquier otra key
+			// presente significa que sí se desencriptó algo, sea o no un tipo que el bot procese.
+			const meaningfulMessageKeys = msg.message
+				? Object.keys(msg.message).filter((key) => key !== "messageContextInfo")
+				: [];
+			const hasContent = meaningfulMessageKeys.length > 0;
 			// OJO: en la práctica la gran mayoría de estos fallos llegan con fromMe:true — son ecos
 			// de mensajes propios rebotando desde otro dispositivo vinculado (multi-device) cuya
 			// sesión de Signal quedó desincronizada. La versión anterior de este chequeo exigía
