@@ -1,6 +1,7 @@
 // scripts/env-loader.ts DEBE ser el primer import para popular process.env antes de que otros módulos lo lean
 import "./env-loader.ts";
 import fs from "node:fs";
+import { Worker } from "node:worker_threads";
 import { startWASocket, shutdownWASocket } from "../src/lib/baileys/client.ts";
 import {
 	getDestructiveRestartFlagPath,
@@ -16,6 +17,32 @@ import { startTlCoverageCron } from "./tl-coverage-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
+
+// Detección de cuelgues del hilo principal (ver incidente 2026-08-05: el proceso quedó
+// congelado ~33 min tras una desconexión, sin crashear, y Railway no lo reinició solo porque
+// seguía "corriendo"). Un watchdog en el mismo hilo no sirve porque si el hilo principal se
+// congela, el watchdog se congela con él. Por eso corre en un worker thread aparte (su propio
+// hilo de OS), que solo confía en un contador compartido: si el hilo principal deja de
+// incrementarlo por más de HEARTBEAT_TIMEOUT_MS, el worker asume el event loop colgado y manda
+// SIGKILL — señal que el kernel entrega igual aunque el hilo principal esté 100% bloqueado.
+const HEARTBEAT_TIMEOUT_MS = 90_000;
+const HEARTBEAT_CHECK_INTERVAL_MS = 10_000;
+
+function startHangWatchdog(): Int32Array {
+	const sharedBuffer = new SharedArrayBuffer(4);
+	const heartbeat = new Int32Array(sharedBuffer);
+	const worker = new Worker(new URL("./hang-watchdog-worker.mjs", import.meta.url), {
+		workerData: {
+			sharedBufferPtr: sharedBuffer,
+			timeoutMs: HEARTBEAT_TIMEOUT_MS,
+			checkIntervalMs: HEARTBEAT_CHECK_INTERVAL_MS,
+		},
+	});
+	worker.on("error", (error) => {
+		console.error("[hang-watchdog] Error en el worker de watchdog:", error);
+	});
+	return heartbeat;
+}
 
 async function main() {
 	console.log("[bot-process] Arrancando bot-process...");
@@ -47,8 +74,14 @@ async function main() {
 	// Anuncio diario de cobertura propia en el grupo de desconexiones, a la hora configurada en Ajustes
 	startTlCoverageCron();
 
+	const heartbeat = startHangWatchdog();
+
 	// Loop de polling para la desconexión / reinicio manual controlado desde el frontend
 	setInterval(async () => {
+		// Latido para el watchdog: si esta línea deja de ejecutarse, el hilo principal está
+		// congelado (ver comentario junto a startHangWatchdog).
+		Atomics.add(heartbeat, 0, 1);
+
 		if (fs.existsSync(softRestartFlagPath)) {
 			console.log(
 				"[bot-process] Bandera .restart-bot detectada. Reinicio suave solicitado.",
