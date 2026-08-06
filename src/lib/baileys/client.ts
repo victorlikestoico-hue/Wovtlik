@@ -647,6 +647,22 @@ function isEndOfShiftReassignRequest(msgLower: string): boolean {
 	return SHIFT_END_PATTERN.test(msgLower) && PENDING_CASES_PATTERN.test(msgLower);
 }
 
+// Temas que a veces llegan al grupo de fallas con el mismo formato del formulario (correo +
+// motivo + LOB) pero que NO son una falla de conectividad — dudas de horario de almuerzo o
+// errores de Slack. No hay nada que desconectar acá: si se encolaran igual que una falla real
+// (queueAgentOffline → status "pending"), el Monitor externo terminaría desconectando al agente
+// por algo que no tiene nada que ver con su turno.
+const NON_DISCONNECTION_TOPIC_KEYWORDS = [
+	"slack",
+	"almuerzo", "lunch", "hora de comer", "hora de comida",
+];
+
+/** true si el motivo del reporte es un tema que no amerita desconectar al agente (ver arriba). */
+function isNonDisconnectionTopic(text: string): boolean {
+	const lower = text.toLowerCase();
+	return NON_DISCONNECTION_TOPIC_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
 /** Clasifica el tipo de falla a partir del texto libre del agente. */
 function classifyFailureReason(text: string): string {
 	const lower = text.toLowerCase();
@@ -1446,6 +1462,7 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 	const formStatus = detectFormStatus(reason);
 	const lob = extractLobFromText(reason) ?? undefined;
 	const failureType = classifyFailureReason(reason);
+	const isNonDisconnection = isNonDisconnectionTopic(reason);
 
 	try {
 		await notifyGroupFailureReport({ phone, senderName, email, reason, formStatus, resolved: false, lob, failureType });
@@ -1470,8 +1487,17 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 	if (!spreadsheetId) return;
 
 	try {
-		const queueReason = `${failureType}${lob ? ` — LOB ${lob}` : ""} (reportado en grupo de fallas)`;
-		const queued = await queueAgentOffline(email, queueReason, spreadsheetId, lob);
+		let queued: { ok: boolean; row: number | null };
+		if (isNonDisconnection) {
+			// Slack, dudas de almuerzo, etc.: se deja constancia en la planilla (misma pestaña
+			// "pending_offline") pero con status/result "ok" en vez de "pending" — igual que
+			// logNoConnectionReport — para que el Monitor externo NO lo tome como una
+			// desconexión a ejecutar. No hay nada que desconectar acá.
+			queued = await logNoConnectionReport(email, reason, spreadsheetId, lob);
+		} else {
+			const queueReason = `${failureType}${lob ? ` — LOB ${lob}` : ""} (reportado en grupo de fallas)`;
+			queued = await queueAgentOffline(email, queueReason, spreadsheetId, lob);
+		}
 		const confirmed = await markGroupFailureReportConfirmed(reportId, queued.ok, queued.row != null ? { spreadsheetId, row: queued.row } : null);
 		// El TL puede reaccionar en el ratito entre insertGroupFailureReport y este confirm —
 		// en ese caso markTlReactionForOthers ya corrió pero no encontró sheet_row, así que la
