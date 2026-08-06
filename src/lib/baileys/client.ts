@@ -396,7 +396,10 @@ function extractGroupMessageText(msg: any): string {
 
 /** Intenta extraer el LOB del texto libre de un reporte del grupo. */
 function extractLobFromText(text: string): string | null {
-	const m = text.match(/\blob[:\s]+([a-záéíóúñüa-z0-9\s]{2,40}?)(?:[,;.\n]|$)/i);
+	// El separador entre "LOB" y el valor no siempre es ":" o un espacio — el formulario que
+	// completan los agentes suele traer un guion ("3️⃣ Tu LOB - FR"), que antes no matcheaba y
+	// dejaba el LOB sin extraer aunque el agente sí lo hubiera puesto.
+	const m = text.match(/\blob[:\s-]+([a-záéíóúñüa-z0-9\s]{2,40}?)(?:[,;.\n]|$)/i);
 	return m ? m[1].trim() : null;
 }
 
@@ -1902,7 +1905,15 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// suficientes para disparar el proceso — el contexto del grupo ya garantiza que es un reporte.
 	const nearMissCategoriesForGroup = detectNearMissCategories(text);
 	const hasGroupOfflineSignal = nearMissCategoriesForGroup.includes("offline");
-	if (!hasFailureKeyword && !hasGroupOfflineSignal && !hasActiveReport) {
+	// Un agente completando el formulario (correo + motivo + LOB) está reportando algo aunque el
+	// texto del motivo no matchee ninguna keyword de OFFLINE_KEYWORDS (ej. "no me ingresa a HC, me
+	// pide acceso de Okta y vuelve a iniciar" — no es ninguna de las frases de la lista, así que
+	// quedaba en silencio: sin reacción, sin acumular, sin quedar ni como near-miss). El correo es
+	// la señal más confiable de que esto es un reporte real en este grupo — a esta altura `text` ya
+	// tiene el correo embebido normalizado a formato completo (ver el bloque de arriba), así que
+	// alcanza con EMAIL_REGEX para cubrir tanto el correo completo como el "nombre.apellido" suelto.
+	const hasEmailSignal = EMAIL_REGEX.test(text);
+	if (!hasFailureKeyword && !hasGroupOfflineSignal && !hasEmailSignal && !hasActiveReport) {
 		// No matcheó ninguna señal de falla. Loguear near-misses de otras categorías.
 		if (nearMissCategoriesForGroup.length > 0) {
 			logNearMissIntent({
