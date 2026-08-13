@@ -214,6 +214,65 @@ export async function getAgentSchedule(
 	return results;
 }
 
+export type AbsenceAlertCandidate = {
+	email:     string;
+	fecha:     string;
+	horario:   string;
+	novedades: string;
+	sheetId:   string;
+	rowIndex:  number;
+};
+
+/**
+ * Barre las hojas de programación buscando, para la fecha dada, agentes marcados
+ * Estado=Ausente cuya Novedades esté vacía o sea "AI" (llegó tarde / no se conectó) —
+ * mismo criterio que ya usa el proyecto Turnos para sus "incidentes AI" pendientes de
+ * justificar. Otras novedades (CTT, vacaciones, etc.) son ausencias justificadas de
+ * antemano y no generan alerta.
+ */
+export async function getAbsentAgentsWithoutJustification(
+	spreadsheetIds: string[],
+	dateISO:        string, // YYYY-MM-DD
+): Promise<AbsenceAlertCandidate[]> {
+	if (!SA_EMAIL || !SA_KEY) return [];
+	const results: AbsenceAlertCandidate[] = [];
+
+	for (const id of spreadsheetIds) {
+		if (!id) continue;
+		try {
+			const { headers, rows } = await readSheetRaw(id);
+			const emailCol   = headers.findIndex(h => /^email$/i.test(h));
+			const fechaCol   = headers.findIndex(h => /^fecha$/i.test(h));
+			const horarioCol = headers.findIndex(h => /^horario\s*roster$/i.test(h));
+			const estadoCol  = headers.findIndex(h => /^estado$/i.test(h));
+			const novedCol   = headers.findIndex(h => /^novedades$/i.test(h));
+			if (emailCol < 0 || fechaCol < 0 || estadoCol < 0) continue;
+
+			for (const { rowIndex, cells } of rows) {
+				if (normalizeFecha(cells[fechaCol] ?? "") !== dateISO) continue;
+				const estado = (cells[estadoCol] ?? "").toLowerCase();
+				if (estado !== "ausente") continue;
+				const novedades = novedCol >= 0 ? (cells[novedCol] ?? "").trim() : "";
+				if (novedades !== "" && novedades.toUpperCase() !== "AI") continue;
+				const email = (cells[emailCol] ?? "").toLowerCase();
+				if (!email || !email.includes("@")) continue;
+				results.push({
+					email,
+					fecha:     cells[fechaCol] ?? "",
+					horario:   horarioCol >= 0 ? (cells[horarioCol] ?? "") : "",
+					novedades,
+					sheetId:   id,
+					rowIndex,
+				});
+			}
+		} catch (err) {
+			console.error(`[sheets] Error leyendo ausentes sin justificar en ${id}:`, err);
+		}
+	}
+
+	return results;
+}
+
 export type AbsenceEntry = { fecha: string; horario: string };
 
 export type AbsenceClearResult =

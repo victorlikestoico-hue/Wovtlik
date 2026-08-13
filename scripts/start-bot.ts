@@ -12,8 +12,8 @@ import { startAppointmentsCron } from "./appointments-cron.ts";
 import { startFallasTemplateCron } from "./fallas-template-cron.ts";
 import { startHorasCubrirCron } from "./horas-cubrir-cron.ts";
 import { startFormBroadcastCron } from "./form-broadcast-cron.ts";
-import { startRecordatoriosDispatchCron } from "./recordatorios-dispatch-cron.ts";
 import { startTlCoverageCron } from "./tl-coverage-cron.ts";
+import { startAbsenceAlertCron } from "./absence-alert-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -68,11 +68,15 @@ async function main() {
 	// Formulario mensual: envía el link a todos los agentes el día 2 y el día 7 de cada mes a las 9h Colombia
 	startFormBroadcastCron();
 
-	// Disparo del workflow de recordatorios-turnos cada 5 min (el cron nativo de GH Actions no es confiable)
-	startRecordatoriosDispatchCron();
+	// Recordatorio de turno por Meta API DESACTIVADO (dejó de pagarse el servicio de WhatsApp
+	// Cloud API): ya no se dispara el workflow de recordatorios-turnos.
 
 	// Anuncio diario de cobertura propia en el grupo de desconexiones, a la hora configurada en Ajustes
 	startTlCoverageCron();
+
+	// Alerta individual por WhatsApp a agentes Ausente sin justificar, solo durante la
+	// misma ventana horaria configurada para "Mi Cobertura" (ver absence-alert-cron.ts)
+	startAbsenceAlertCron();
 
 	const heartbeat = startHangWatchdog();
 
