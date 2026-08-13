@@ -410,23 +410,6 @@ CREATE TABLE IF NOT EXISTS agents_master (
   wave TEXT NOT NULL DEFAULT '',
   synced_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-
-INSERT INTO form_agents (name, phone) VALUES
-  ('Liliana',   '573107226481'),
-  ('Marlon',    '573158202463'),
-  ('Belcy',     '573222100253'),
-  ('Juliett',   '573115248485'),
-  ('Mary',      '573187912575'),
-  ('Rafael',    '573021057509'),
-  ('Leidy',     '573185633098'),
-  ('Felipe',    '573502896859'),
-  ('Yinery',    '573143806767'),
-  ('Estephany', '573208434094'),
-  ('Eyder',     '573142508700'),
-  ('Angelica',  '573103937935'),
-  ('Manuel',    '573143084870'),
-  ('Ana',       '573016713921')
-ON CONFLICT (phone) DO NOTHING;
 `;
 
 export interface ConversationRow {
