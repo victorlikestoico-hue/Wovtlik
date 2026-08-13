@@ -1,0 +1,28 @@
+diff --git a/node_modules/@whiskeysockets/baileys/lib/Utils/use-multi-file-auth-state.js b/node_modules/@whiskeysockets/baileys/lib/Utils/use-multi-file-auth-state.js
+index dc8182c..1b0a952 100644
+--- a/node_modules/@whiskeysockets/baileys/lib/Utils/use-multi-file-auth-state.js
++++ b/node_modules/@whiskeysockets/baileys/lib/Utils/use-multi-file-auth-state.js
+@@ -1,5 +1,6 @@
++import { randomUUID } from 'crypto';
+ import { Mutex } from 'async-mutex';
+-import { mkdir, readFile, stat, unlink, writeFile } from 'fs/promises';
++import { mkdir, readFile, rename, stat, unlink, writeFile } from 'fs/promises';
+ import { join } from 'path';
+ import { proto } from '../../WAProto/index.js';
+ import { initAuthCreds } from './auth-utils.js';
+@@ -32,7 +33,14 @@ export const useMultiFileAuthState = async (folder) => {
+         const mutex = getFileLock(filePath);
+         return mutex.acquire().then(async (release) => {
+             try {
+-                await writeFile(filePath, JSON.stringify(data, BufferJSON.replacer));
++                // Escritura atomica: si el proceso muere (ej. SIGKILL del watchdog de cuelgues)
++                // a mitad de la escritura, el archivo original queda intacto en vez de truncado
++                // o con contenido mezclado -- una sesion de Signal corrupta en disco desincroniza
++                // el contador de mensajes con el peer y dispara errores "Bad MAC" en cascada que
++                // no se autocorrigen.
++                const tmpPath = `${filePath}.${randomUUID()}.tmp`;
++                await writeFile(tmpPath, JSON.stringify(data, BufferJSON.replacer));
++                await rename(tmpPath, filePath);
+             }
+             finally {
+                 release();

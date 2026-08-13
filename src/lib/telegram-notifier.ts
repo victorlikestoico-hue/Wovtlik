@@ -44,6 +44,11 @@ export interface BotDisconnectedNotificationInput {
 	minutesDisconnected: number;
 }
 
+export interface DecryptionStormNotificationInput {
+	failureCount: number;
+	windowSeconds: number;
+}
+
 export interface GroupFailureReportNotificationInput {
 	phone: string;
 	senderName: string;
@@ -138,6 +143,16 @@ export function formatBotDisconnectedNotification(
 	].join("\n");
 }
 
+export function formatDecryptionStormNotification(
+	input: DecryptionStormNotificationInput,
+): string {
+	return [
+		"🔴 <b>Tormenta de fallos de desencriptación</b>",
+		`${input.failureCount} fallos de sesión de Signal (Bad MAC) en los últimos ${input.windowSeconds}s.`,
+		"El bot puede haber dejado de procesar mensajes de grupos (ej. reacciones en el grupo de desconexiones). Revisá los logs en Railway.",
+	].join("\n");
+}
+
 export function formatGroupFailureReportNotification(
 	input: GroupFailureReportNotificationInput,
 ): string {
@@ -220,6 +235,9 @@ export function createTelegramNotifier(config: TelegramNotifierConfig) {
 		},
 		notifyBotDisconnected(input: BotDisconnectedNotificationInput) {
 			return sendText(formatBotDisconnectedNotification(input));
+		},
+		notifyDecryptionStorm(input: DecryptionStormNotificationInput) {
+			return sendText(formatDecryptionStormNotification(input));
 		},
 	};
 }

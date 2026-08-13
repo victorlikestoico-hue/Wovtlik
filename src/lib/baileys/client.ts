@@ -52,6 +52,7 @@ import {
 	saveCrmTask,
 	notifyGroupFailureReport,
 	notifyBotDisconnected,
+	notifyDecryptionStorm,
 	logNearMissIntent,
 	insertGroupFailureReport,
 	markGroupFailureReportConfirmed,
@@ -2144,6 +2145,33 @@ const lidToPhoneJid = new Map<string, string>();
 const lastSessionAssertAt = new Map<string, number>();
 const SESSION_ASSERT_COOLDOWN_MS = 30_000;
 
+// Alerta temprana de tormenta de "Bad MAC" / fallos de desencriptación (ver incidente
+// 2026-08-12: el bot quedó ~22hs sin procesar el grupo de fallas y nadie se enteró hasta que
+// preguntaron por qué había dejado de reaccionar). Si se acumulan DECRYPTION_STORM_THRESHOLD
+// fallos dentro de DECRYPTION_STORM_WINDOW_MS se avisa una vez por Telegram — con su propio
+// cooldown para no espamear si la tormenta sigue — en vez de depender de que alguien lo note.
+const decryptionFailureTimestamps: number[] = [];
+const DECRYPTION_STORM_WINDOW_MS = 60_000;
+const DECRYPTION_STORM_THRESHOLD = 30;
+const DECRYPTION_STORM_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+let lastDecryptionStormAlertAt = 0;
+
+/** Registra un fallo de desencriptación y dispara la alerta de Telegram si cruza el umbral. */
+function trackDecryptionFailureAndMaybeAlert(): void {
+	const now = Date.now();
+	decryptionFailureTimestamps.push(now);
+	while (decryptionFailureTimestamps.length > 0 && now - decryptionFailureTimestamps[0] > DECRYPTION_STORM_WINDOW_MS) {
+		decryptionFailureTimestamps.shift();
+	}
+	if (decryptionFailureTimestamps.length < DECRYPTION_STORM_THRESHOLD) return;
+	if (now - lastDecryptionStormAlertAt < DECRYPTION_STORM_ALERT_COOLDOWN_MS) return;
+	lastDecryptionStormAlertAt = now;
+	const count = decryptionFailureTimestamps.length;
+	void notifyDecryptionStorm(count, Math.round(DECRYPTION_STORM_WINDOW_MS / 1000)).catch((err) =>
+		console.error("[bot] Error enviando alerta de tormenta de desencriptación a Telegram:", err),
+	);
+}
+
 // Instancia global del socket y controlador de reconexión
 export let globalSock: ReturnType<typeof makeWASocket> | null = null;
 // Verdadero sólo cuando el socket alcanzó el estado "open" (conexión establecida con WhatsApp).
@@ -2913,6 +2941,9 @@ export async function startWASocket() {
 			console.log(
 				`[bot-debug] Evaluando mensaje: fromMe=${msg.key.fromMe}, remoteJid=${msg.key.remoteJid}, messageKeys=${msg.message ? Object.keys(msg.message).join(", ") : "none"}, stubType=${msg.messageStubType}, hasContent=${hasContent}, isDecryptionFailure=${isDecryptionFailure}`
 			);
+			if (isDecryptionFailure) {
+				trackDecryptionFailureAndMaybeAlert();
+			}
 			if (isDecryptionFailure && msg.key.remoteJid) {
 				const remoteJid = msg.key.remoteJid;
 				// En 1:1 el JID a reparar es el propio remoteJid. En grupos (@g.us) la sesión rota es

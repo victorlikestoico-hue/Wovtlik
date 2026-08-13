@@ -756,6 +756,17 @@ export async function notifyBotDisconnected(minutesDisconnected: number): Promis
 	await notifier.notifyBotDisconnected({ minutesDisconnected });
 }
 
+export async function notifyDecryptionStorm(failureCount: number, windowSeconds: number): Promise<void> {
+	const botToken = process.env.TELEGRAM_BOT_TOKEN;
+	const chatId = process.env.TELEGRAM_CHAT_ID;
+	const notifier = createTelegramNotifier({
+		botToken,
+		chatId,
+		fetch: globalThis.fetch as any,
+	});
+	await notifier.notifyDecryptionStorm({ failureCount, windowSeconds });
+}
+
 // 24. updateConversation(id, patch)
 export async function updateConversation(
 	id: number,

@@ -1,3 +1,18 @@
+diff --git a/node_modules/libsignal/src/session_cipher.js b/node_modules/libsignal/src/session_cipher.js
+index 0e6df11..4cebb71 100644
+--- a/node_modules/libsignal/src/session_cipher.js
++++ b/node_modules/libsignal/src/session_cipher.js
+@@ -154,10 +154,6 @@ class SessionCipher {
+                 errs.push(e);
+             }
+         }
+-        console.error("Failed to decrypt message with any known session...");
+-        for (const e of errs) {
+-            console.error("Session error:" + e, e.stack);
+-        }
+         throw new errors.SessionError("No matching sessions found for message");
+     }
+ 
 diff --git a/node_modules/libsignal/src/session_record.js b/node_modules/libsignal/src/session_record.js
 index 7626a39..c80d5d0 100644
 --- a/node_modules/libsignal/src/session_record.js
