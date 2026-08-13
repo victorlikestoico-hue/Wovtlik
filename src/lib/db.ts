@@ -12,6 +12,7 @@ import {
 	type EventActorRole,
 	type ConversationEventRow,
 	type AgentProfileRow,
+	type KnowledgeDocumentRow,
 } from "./db-contract.ts";
 import type { ConversationMode } from "../domain/whatsapp-rules.ts";
 import { createPostgresRepository, initializePostgresSchema } from "./postgres-adapter.ts";
@@ -696,6 +697,98 @@ export async function setActiveSystemPrompt(id: number): Promise<void> {
 		await pool.query("ROLLBACK");
 		throw error;
 	}
+}
+
+// 22b. CRUD + búsqueda full-text para knowledge_documents (SOPs internos)
+export async function listKnowledgeDocuments(): Promise<KnowledgeDocumentRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<KnowledgeDocumentRow>(
+		"SELECT * FROM knowledge_documents ORDER BY title ASC"
+	);
+	return res.rows;
+}
+
+export async function getKnowledgeDocument(id: number): Promise<KnowledgeDocumentRow | null> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<KnowledgeDocumentRow>(
+		"SELECT * FROM knowledge_documents WHERE id = $1",
+		[id]
+	);
+	return res.rows[0] ?? null;
+}
+
+export async function saveKnowledgeDocument(input: {
+	title: string;
+	content: string;
+	tags?: string[];
+	category?: string | null;
+}): Promise<KnowledgeDocumentRow> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<KnowledgeDocumentRow>(
+		`INSERT INTO knowledge_documents (title, content, tags, category, is_active, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, TRUE, NOW(), NOW())
+		 RETURNING *`,
+		[input.title, input.content, input.tags ?? [], input.category ?? null]
+	);
+	return res.rows[0];
+}
+
+export async function updateKnowledgeDocument(
+	id: number,
+	patch: { title?: string; content?: string; tags?: string[]; category?: string | null; is_active?: boolean },
+): Promise<KnowledgeDocumentRow> {
+	await ensureSchemaInitialized();
+	const existing = await getKnowledgeDocument(id);
+	if (!existing) throw new Error(`knowledge_document_not_found:${id}`);
+	const merged = { ...existing, ...patch };
+	const res = await pool.query<KnowledgeDocumentRow>(
+		`UPDATE knowledge_documents
+		 SET title = $1, content = $2, tags = $3, category = $4, is_active = $5, updated_at = NOW()
+		 WHERE id = $6
+		 RETURNING *`,
+		[merged.title, merged.content, merged.tags, merged.category, merged.is_active, id]
+	);
+	return res.rows[0];
+}
+
+export async function deleteKnowledgeDocument(id: number): Promise<void> {
+	await ensureSchemaInitialized();
+	await pool.query("DELETE FROM knowledge_documents WHERE id = $1", [id]);
+}
+
+export async function searchKnowledgeDocuments(
+	queryText: string,
+	limit = 2,
+	lobFilter?: string,
+): Promise<KnowledgeDocumentRow[]> {
+	await ensureSchemaInitialized();
+	// plainto_tsquery exige que TODAS las palabras estén presentes (AND), lo cual
+	// es demasiado estricto para un chunk de conversación con varias frases sueltas.
+	// Armamos un "or" entre las palabras significativas para que alcance con que
+	// coincida alguna, y dejamos que ts_rank ordene por relevancia.
+	const words = queryText
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}\s]/gu, " ")
+		.split(/\s+/)
+		.filter((w) => w.length >= 3);
+	if (words.length === 0) return [];
+	const orQuery = words.join(" or ");
+	// lobFilter restringe a documentos etiquetados para ese LOB (tags contiene el
+	// LOB, ej. 'fraude'), para que un agente de otro LOB nunca reciba SOPs que no
+	// le corresponden aunque el texto matchee por palabras clave.
+	const lobClause = lobFilter ? "AND tags @> ARRAY[$3::text]" : "";
+	const params = lobFilter ? [orQuery, limit, lobFilter] : [orQuery, limit];
+	const res = await pool.query<KnowledgeDocumentRow>(
+		`SELECT id, title, content, tags, category, is_active, created_at, updated_at
+		 FROM knowledge_documents
+		 WHERE is_active = TRUE
+		   AND to_tsvector('spanish', title || ' ' || content) @@ websearch_to_tsquery('spanish', $1)
+		   ${lobClause}
+		 ORDER BY ts_rank(to_tsvector('spanish', title || ' ' || content), websearch_to_tsquery('spanish', $1)) DESC
+		 LIMIT $2`,
+		params
+	);
+	return res.rows;
 }
 
 // 23. notifyTelegramHumanNeeded

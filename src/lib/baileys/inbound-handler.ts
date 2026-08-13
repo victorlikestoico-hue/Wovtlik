@@ -7,6 +7,7 @@ import {
 	type MessageRole,
 } from "../../domain/whatsapp-rules.ts";
 import { getTLEnTurno, normalizeLOB } from "../tl-guardia.ts";
+import { searchKnowledgeDocuments, getAgentProfile } from "../db.ts";
 import type {
 	ConversationEventRow,
 	ConversationEventType,
@@ -327,6 +328,47 @@ async function resolveTLInjection(
 	}
 
 	return `\n\n## DATO EN TIEMPO REAL — TL en turno\nLOB: ${detectedLob.toUpperCase()}\nTL asignado ahora: ${result.name}\nHasta las: ${result.finUY} (hora Uruguay) / ${result.finCOL} (hora Colombia)`;
+}
+
+const SOP_QUERY_RE =
+	/\b(fraude|whitelist|\bwl\b|forense|cup[oó]n(es)?|bloque[oa]d?[oa]?|cuenta\s+inactiva|reactivar|omad|legales|courier|iv[_\s]?risk|business.*peya|peya.*business|1vu?\b|backoffice)\b/i;
+
+async function resolveSopInjection(
+	phone: string,
+	history: HistoryMessage[],
+	queued: Array<{ text: string }>,
+): Promise<string> {
+	const texts = [
+		...history.slice(-6).map(h => h.content),
+		...queued.map(q => q.text),
+	];
+	const relevant = texts.filter(t => SOP_QUERY_RE.test(t));
+	if (relevant.length === 0) return "";
+
+	// Los SOPs indexados son por LOB (hoy solo "fraude"). Solo se inyectan si el
+	// agente que escribe tiene ese LOB registrado en su perfil — un agente de otro
+	// LOB (CS, SM, PO, GO, OV) no debe recibir procesos que no le corresponden,
+	// aunque su mensaje matchee palabras clave en común (ej. "cupón", "bloqueo").
+	let agentLob: string | null = null;
+	try {
+		const profile = await getAgentProfile(phone);
+		agentLob = profile?.lob?.toLowerCase().trim() || null;
+	} catch {
+		return "";
+	}
+	if (!agentLob) return "";
+
+	const queryText = relevant.join(" ").slice(0, 500);
+	let docs: Awaited<ReturnType<typeof searchKnowledgeDocuments>>;
+	try {
+		docs = await searchKnowledgeDocuments(queryText, 1, agentLob);
+	} catch {
+		return "";
+	}
+	if (docs.length === 0) return "";
+
+	const doc = docs[0];
+	return `\n\n## SOP DE ${agentLob.toUpperCase()} RELEVANTE (consultá esto antes de responder)\nTítulo: ${doc.title}\n\n${doc.content}`;
 }
 
 export function createInboundHandler(deps: InboundHandlerDeps) {
@@ -673,10 +715,11 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 			});
 
 			const tlInjection = await resolveTLInjection(mappedHistory, mappedQueuedMessages);
+			const sopInjection = await resolveSopInjection(phone, mappedHistory, mappedQueuedMessages);
 			const rawReply = await deps.callDeepSeek({
 				conversationId: beforeConversation.id,
 				history: mappedHistory,
-				systemPrompt: systemPrompt + tlInjection,
+				systemPrompt: systemPrompt + tlInjection + sopInjection,
 				queuedMessages: mappedQueuedMessages,
 			});
 			const parsed = parseNormalReply(rawReply);

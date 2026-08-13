@@ -286,6 +286,19 @@ CREATE TABLE IF NOT EXISTS system_prompts (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tags TEXT[] NOT NULL DEFAULT '{}',
+  category TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_search ON knowledge_documents USING GIN (to_tsvector('spanish', title || ' ' || content));
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_tags ON knowledge_documents USING GIN (tags);
+
 CREATE TABLE IF NOT EXISTS automations (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
@@ -441,6 +454,16 @@ export interface ConversationRow {
 	lead_score_reason: string | null;
 	lead_updated_at: Date | null;
 	lead_updated_by: "assistant" | "dashboard" | null;
+	created_at: Date;
+	updated_at: Date;
+}
+export interface KnowledgeDocumentRow {
+	id: number;
+	title: string;
+	content: string;
+	tags: string[];
+	category: string | null;
+	is_active: boolean;
 	created_at: Date;
 	updated_at: Date;
 }
