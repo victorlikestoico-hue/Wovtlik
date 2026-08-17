@@ -49,6 +49,14 @@ export interface DecryptionStormNotificationInput {
 	windowSeconds: number;
 }
 
+export interface TlCoverageAnnouncedNotificationInput {
+	start: string;
+	end: string;
+	lobs: string[];
+	name: string;
+	phone: string;
+}
+
 export interface GroupFailureReportNotificationInput {
 	phone: string;
 	senderName: string;
@@ -156,20 +164,30 @@ export function formatDecryptionStormNotification(
 export function formatGroupFailureReportNotification(
 	input: GroupFailureReportNotificationInput,
 ): string {
-	const formLabel = input.formStatus === "yes"
-		? "✅ sí"
-		: input.formStatus === "no"
-			? "⚠️ no"
-			: "no mencionado";
-
 	return [
 		input.resolved ? "✅ <b>Falla reportada como resuelta</b>" : "🚨 <b>Reporte de falla (grupo)</b>",
 		`Agente: ${escapeHtml(input.senderName)} (${escapeHtml(input.phone)})`,
 		input.email ? `Correo: ${escapeHtml(input.email)}` : "Correo: no identificado",
 		input.lob ? `LOB: ${escapeHtml(input.lob)}` : "",
 		input.failureType ? `Tipo: ${escapeHtml(input.failureType)}` : `Motivo: ${escapeHtml(input.reason.slice(0, 200))}`,
-		input.resolved ? "" : `Formulario: ${formLabel}`,
 	].filter(Boolean).join("\n");
+}
+
+function formatLobList(lobs: string[]): string {
+	const upper = lobs.map((l) => l.toUpperCase());
+	if (upper.length <= 1) return upper.join("");
+	return `${upper.slice(0, -1).join(", ")} & ${upper[upper.length - 1]}`;
+}
+
+export function formatTlCoverageAnnouncedNotification(
+	input: TlCoverageAnnouncedNotificationInput,
+): string {
+	return [
+		"📣 <b>Cobertura anunciada en el grupo de desconexiones</b>",
+		`TL: ${escapeHtml(input.name)} (${escapeHtml(input.phone)})`,
+		`Horario: ${escapeHtml(input.start)} a ${escapeHtml(input.end)} UY`,
+		`LOB${input.lobs.length > 1 ? "s" : ""}: ${escapeHtml(formatLobList(input.lobs))}`,
+	].join("\n");
 }
 
 export function createTelegramNotifier(config: TelegramNotifierConfig) {
@@ -238,6 +256,9 @@ export function createTelegramNotifier(config: TelegramNotifierConfig) {
 		},
 		notifyDecryptionStorm(input: DecryptionStormNotificationInput) {
 			return sendText(formatDecryptionStormNotification(input));
+		},
+		notifyTlCoverageAnnounced(input: TlCoverageAnnouncedNotificationInput) {
+			return sendText(formatTlCoverageAnnouncedNotification(input));
 		},
 	};
 }

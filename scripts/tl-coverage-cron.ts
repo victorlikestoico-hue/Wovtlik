@@ -1,6 +1,6 @@
 import "./env-loader.ts";
 import { Redis } from "ioredis";
-import { getSettings } from "../src/lib/db.ts";
+import { getSettings, notifyTlCoverageAnnounced } from "../src/lib/db.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
@@ -110,6 +110,13 @@ export async function runTlCoverageCronOnce(): Promise<
 		const message = buildCoverageMessage(start, end, lobs);
 		await sendViaGlobalSock(FALLAS_GROUP_JID, { text: message }, { kind: "cron" });
 
+		const name = (settings.tl_coverage_name as string) || phone;
+		try {
+			await notifyTlCoverageAnnounced({ start, end, lobs, name, phone });
+		} catch (err) {
+			console.error("[tl-coverage-cron] Error notificando a Telegram:", err);
+		}
+
 		// Sticker opcional configurado en Ajustes: viaja como base64 (no como archivo en disco)
 		// por la misma razón que el outbox lo maneja así — mediaDir no está en el volumen
 		// persistente de Railway. Si falla, no debe tumbar el resto del tick (el texto ya salió).
@@ -126,7 +133,6 @@ export async function runTlCoverageCronOnce(): Promise<
 			}
 		}
 
-		const name = (settings.tl_coverage_name as string) || phone;
 		const jid = `${phone}@s.whatsapp.net`;
 		const ttlSeconds = computeTtlSeconds(end);
 		await Promise.all(

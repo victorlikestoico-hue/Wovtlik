@@ -860,6 +860,23 @@ export async function notifyDecryptionStorm(failureCount: number, windowSeconds:
 	await notifier.notifyDecryptionStorm({ failureCount, windowSeconds });
 }
 
+export async function notifyTlCoverageAnnounced(input: {
+	start: string;
+	end: string;
+	lobs: string[];
+	name: string;
+	phone: string;
+}): Promise<void> {
+	const botToken = process.env.TELEGRAM_BOT_TOKEN;
+	const chatId = process.env.TELEGRAM_CHAT_ID;
+	const notifier = createTelegramNotifier({
+		botToken,
+		chatId,
+		fetch: globalThis.fetch as any,
+	});
+	await notifier.notifyTlCoverageAnnounced(input);
+}
+
 // 24. updateConversation(id, patch)
 export async function updateConversation(
 	id: number,
