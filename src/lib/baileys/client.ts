@@ -400,7 +400,15 @@ function extractLobFromText(text: string): string | null {
 	// El separador entre "LOB" y el valor no siempre es ":" o un espacio — el formulario que
 	// completan los agentes suele traer un guion ("3️⃣ Tu LOB - FR"), que antes no matcheaba y
 	// dejaba el LOB sin extraer aunque el agente sí lo hubiera puesto.
-	const m = text.match(/\blob[:\s-]+([a-záéíóúñüa-z0-9\s]{2,40}?)(?:[,;.\n]|$)/i);
+	//
+	// Algunos agentes escriben el formulario entero pegado, sin espacio ni salto de línea entre
+	// campos (ej. "Motivo: Internet3️⃣ LOB: Cs Live4️⃣ Enviar Video o Foto"). El emoji numeral del
+	// siguiente campo queda pegado justo después del valor, y como no es ninguno de los
+	// terminadores explícitos (",", ";", ".", salto de línea o fin del texto) el match entero
+	// fallaba y el LOB no se extraía. El lookahead genérico corta apenas aparece cualquier
+	// carácter fuera del charset del valor (letras/espacios), sin depender de un separador
+	// explícito; los dígitos se sacaron del charset del valor para que no se coman el "3️⃣"/"4️⃣".
+	const m = text.match(/\blob[:\s-]+([a-záéíóúñüa-z\s]{2,40}?)(?=[,;.\n]|[^a-záéíóúñüa-z\s]|$)/i);
 	return m ? m[1].trim() : null;
 }
 
