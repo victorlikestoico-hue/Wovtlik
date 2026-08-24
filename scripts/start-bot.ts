@@ -14,6 +14,7 @@ import { startHorasCubrirCron } from "./horas-cubrir-cron.ts";
 import { startFormBroadcastCron } from "./form-broadcast-cron.ts";
 import { startTlCoverageCron } from "./tl-coverage-cron.ts";
 import { startAbsenceAlertCron } from "./absence-alert-cron.ts";
+import { startTlNoAnnouncedReportCron } from "./tl-no-announced-report-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -77,6 +78,10 @@ async function main() {
 	// Alerta individual por WhatsApp a agentes Ausente sin justificar, solo durante la
 	// misma ventana horaria configurada para "Mi Cobertura" (ver absence-alert-cron.ts)
 	startAbsenceAlertCron();
+
+	// Reporte diario a las 02:00 UY por Telegram: TL con turno (rooster) que nunca se anunciaron
+	// en el grupo de desconexiones el día anterior
+	startTlNoAnnouncedReportCron();
 
 	const heartbeat = startHangWatchdog();
 

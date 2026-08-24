@@ -65,6 +65,7 @@ import {
 	listStaleUnreactedGroupFailureReports,
 	markGroupFailureReportStaleAlertSent,
 	notifyTlNotResponding,
+	recordTlAnnouncement,
 	type GroupFailureReportRow,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
@@ -689,6 +690,12 @@ function computeTlAnnouncementTtlSeconds(text: string, now: Date): number {
 
 type TlAnnouncement = { phone: string; name: string; jid: string; until: string };
 const tlAnnouncementKey = (lob: string) => `bot:tl_announcement:${lob}`;
+
+/** Fecha de hoy (huso Uruguay) en formato YYYY-MM-DD — mismo formato que usa
+ * tl-no-announced-report-cron.ts para cruzar contra el rooster del día. */
+function currentDateUruguayISO(): string {
+	return new Date().toLocaleDateString("en-CA", { timeZone: "America/Montevideo" });
+}
 
 /**
  * Un anuncio nuevo para el mismo LOB siempre reemplaza al anterior (mismo SET, misma key).
@@ -1904,6 +1911,17 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 				console.log(
 					`[fallas-group] Anuncio de TL guardado: ${senderName} (${phone}) cubre [${announcedLobs.join(", ")}] por ${Math.round(ttlSeconds / 60)}min.`,
 				);
+				// Historial persistente (no expira como el SET de Redis de arriba) para el reporte de
+				// fin de día de TL con turno que nunca se anunciaron — ver tl-no-announced-report-cron.ts.
+				const announcerEmail = await resolveReactorProfileEmail(phone).catch(() => null);
+				const announcementDay = currentDateUruguayISO();
+				Promise.all(
+					announcedLobs.map((lob) =>
+						recordTlAnnouncement({ lob, phone, name: senderName, email: announcerEmail, day: announcementDay }),
+					),
+				).catch((err) => {
+					console.error("[fallas-group] Error guardando historial persistente de anuncio de TL:", err);
+				});
 				const startLabel = formatUyTime(new Date().toISOString()) ?? "ahora";
 				const endLabel = formatUyTime(new Date(Date.now() + ttlSeconds * 1000).toISOString()) ?? "";
 				notifyTlCoverageAnnounced({

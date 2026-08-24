@@ -51,7 +51,7 @@ export interface WolftlsBlock {
 export const WOLFTLS_COVERED_LOBS = ["fr", "im", "aj", "rv", "pdi"] as const;
 
 const DAY_ORDER = ["L", "M", "X", "J", "V", "S", "D"] as const;
-type DayLetter = (typeof DAY_ORDER)[number];
+export type DayLetter = (typeof DAY_ORDER)[number];
 
 let _token: { value: string; expiresAt: number } | null = null;
 
@@ -193,4 +193,15 @@ export async function getScheduledTlForLob(
 	if (!match) return null;
 
 	return { email: match.mail.toLowerCase().trim(), until: match.end };
+}
+
+/**
+ * Todos los bloques programados del rooster de Wolftls para un día de la semana dado (una sola
+ * franja horaria cubre en conjunto los LOB de WOLFTLS_COVERED_LOBS — el rooster no distingue por
+ * LOB individual dentro de ese grupo). Se usa para el reporte de fin de día de qué TL con turno
+ * nunca se anunciaron en el grupo de desconexiones.
+ */
+export async function getScheduledBlocksForDay(day: DayLetter): Promise<WolftlsBlock[]> {
+	const blocks = await getBlocks();
+	return blocks.filter((b) => b.dia === day);
 }

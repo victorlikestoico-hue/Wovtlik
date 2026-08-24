@@ -32,6 +32,17 @@ export type TLResult =
 	| { found: true;  name: string; finUY: string; finCOL: string; isRotacion: boolean }
 	| { found: false; reason: "no_column" | "no_data" | "error" };
 
+export type TLDayBlock = {
+	group: "cs_sm" | "po_go";
+	/** Email en minúsculas tal cual figura en la celda del sheet, o null si es "Rotación" (nadie
+	 * puntual a quien atribuirle el turno). */
+	email: string | null;
+	name: string;
+	isRotacion: boolean;
+	inicioUY: string;
+	finUY: string;
+};
+
 export function normalizeLOB(raw: string): string | null {
 	const n = raw.trim().toLowerCase().replace(/\s+/g, " ");
 	return n in LOB_COL ? n : null;
@@ -122,5 +133,54 @@ export async function getTLEnTurno(lob: string): Promise<TLResult> {
 	} catch (err) {
 		console.error("[tl-guardia] Error consultando sheet:", err);
 		return { found: false, reason: "error" };
+	}
+}
+
+/**
+ * Todos los bloques de turno (CS/SM y PO/GO) programados para un día de la semana dado —a
+ * diferencia de getTLEnTurno, que solo devuelve el bloque vigente en el instante actual. Se usa
+ * para el reporte de fin de día de qué TL con turno nunca se anunciaron en el grupo de
+ * desconexiones (ver tl-no-announced-report-cron.ts).
+ *
+ * `dayOfWeek` sigue la convención de Date.getDay() (0=domingo). Celdas vacías se omiten (sin TL
+ * asignado = sin turno, no corresponde reportarlas); celdas "Rotación" se incluyen con email null.
+ */
+export async function getTLDaySchedule(dayOfWeek: number): Promise<TLDayBlock[]> {
+	const blockIdx = DAY_BLOCK[dayOfWeek] ?? 0;
+	const dayOffset = blockIdx * COLS_PER_DAY;
+
+	try {
+		const url = `https://docs.google.com/spreadsheets/d/${TL_SHEET_ID}/export?format=csv&gid=${TL_SHEET_GID}`;
+		const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+		if (!res.ok) return [];
+
+		const rows = parseCSV(await res.text()).slice(2); // skip 2 header rows
+		const out: TLDayBlock[] = [];
+
+		for (const row of rows) {
+			const inicioStr = row[dayOffset + COL_INICIO] ?? "";
+			const finStr    = row[dayOffset + COL_FIN]    ?? "";
+			if (!inicioStr || !finStr) continue;
+
+			for (const [group, col] of [["cs_sm", COL_CS_SM], ["po_go", COL_PO_GO]] as const) {
+				const cell = (row[dayOffset + col] ?? "").trim();
+				if (!cell) continue; // sin TL asignado ese bloque = sin turno, no se reporta
+
+				const isRotacion = /rotac/i.test(cell);
+				out.push({
+					group,
+					email: isRotacion ? null : cell.toLowerCase(),
+					name: isRotacion ? "Rotación" : nameFromEmail(cell),
+					isRotacion,
+					inicioUY: inicioStr,
+					finUY: finStr,
+				});
+			}
+		}
+
+		return out;
+	} catch (err) {
+		console.error("[tl-guardia] Error consultando sheet (getTLDaySchedule):", err);
+		return [];
 	}
 }

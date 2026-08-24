@@ -918,6 +918,54 @@ export async function notifyTlNotResponding(input: {
 	return result.ok;
 }
 
+export async function notifyTlDailyMissedAnnouncements(input: {
+	day: string;
+	misses: Array<{ name: string; email: string | null; group: string; start: string; end: string }>;
+}): Promise<void> {
+	const botToken = process.env.TELEGRAM_BOT_TOKEN;
+	const chatId = process.env.TELEGRAM_CHAT_ID;
+	const notifier = createTelegramNotifier({
+		botToken,
+		chatId,
+		fetch: globalThis.fetch as any,
+	});
+	const result = await notifier.notifyTlDailyMissedAnnouncements(input);
+	logIfTelegramNotificationFailed("notifyTlDailyMissedAnnouncements", result);
+}
+
+// ── TL Announcements (historial persistente de "los acompaño con..." en el grupo de
+// desconexiones — ver tl-no-announced-report-cron.ts) ───────────────────────────────
+
+export type TlAnnouncementRow = {
+	lob: string;
+	phone: string;
+	name: string;
+	email: string | null;
+};
+
+export async function recordTlAnnouncement(input: {
+	lob: string;
+	phone: string;
+	name: string;
+	email: string | null;
+	day: string;
+}): Promise<void> {
+	await ensureSchemaInitialized();
+	await pool.query(
+		"INSERT INTO tl_announcements (lob, phone, name, email, day) VALUES ($1, $2, $3, $4, $5)",
+		[input.lob, input.phone, input.name, input.email, input.day],
+	);
+}
+
+export async function getTlAnnouncementsForDay(day: string): Promise<TlAnnouncementRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<TlAnnouncementRow>(
+		"SELECT DISTINCT lob, phone, name, email FROM tl_announcements WHERE day = $1",
+		[day],
+	);
+	return res.rows;
+}
+
 // 24. updateConversation(id, patch)
 export async function updateConversation(
 	id: number,

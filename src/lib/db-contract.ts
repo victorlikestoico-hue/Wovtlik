@@ -427,6 +427,21 @@ CREATE TABLE IF NOT EXISTS agents_master (
   wave TEXT NOT NULL DEFAULT '',
   synced_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
+
+-- Historial de anuncios de cobertura de TL en el grupo de desconexiones ("los acompaño con...").
+-- A diferencia de bot:tl_announcement:<lob> en Redis (que solo guarda el anuncio VIGENTE, con TTL
+-- hasta el fin del turno), esto persiste cada anuncio para poder armar el reporte de fin de día de
+-- qué TL con turno nunca se anunciaron (ver tl-no-announced-report-cron.ts).
+CREATE TABLE IF NOT EXISTS tl_announcements (
+  id SERIAL PRIMARY KEY,
+  lob TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  name TEXT NOT NULL,
+  email TEXT,
+  day TEXT NOT NULL,
+  announced_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tl_announcements_day_lob ON tl_announcements(day, lob);
 `;
 
 export interface ConversationRow {

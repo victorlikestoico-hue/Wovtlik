@@ -82,6 +82,13 @@ export interface TlNotRespondingNotificationInput {
 	tlSource?: "anuncio" | "rooster";
 }
 
+export interface TlDailyMissedAnnouncementsNotificationInput {
+	/** Fecha (Uruguay, YYYY-MM-DD) del día que cierra el reporte — el día calendario que acaba de terminar. */
+	day: string;
+	/** TL con turno asignado (rooster) que nunca mandaron el "los acompaño con..." ese día. Vacío = todos anunciaron. */
+	misses: Array<{ name: string; email: string | null; group: string; start: string; end: string }>;
+}
+
 export type TelegramNotificationResult =
 	| {
 			ok: true;
@@ -227,6 +234,28 @@ export function formatTlNotRespondingNotification(
 	return lines.join("\n");
 }
 
+export function formatTlDailyMissedAnnouncementsNotification(
+	input: TlDailyMissedAnnouncementsNotificationInput,
+): string {
+	if (input.misses.length === 0) {
+		return [
+			"📋 <b>Reporte diario de anuncios de TL</b>",
+			`Día: ${escapeHtml(input.day)}`,
+			"Todos los TL con turno se anunciaron en el grupo de desconexiones.",
+		].join("\n");
+	}
+	const lines = [
+		"📋 <b>TL con turno que no se anunciaron</b>",
+		`Día: ${escapeHtml(input.day)}`,
+		"",
+	];
+	for (const miss of input.misses) {
+		const who = miss.email ? `${escapeHtml(miss.name)} (${escapeHtml(miss.email)})` : escapeHtml(miss.name);
+		lines.push(`• ${who} — ${escapeHtml(miss.group)} ${escapeHtml(miss.start)} a ${escapeHtml(miss.end)} UY`);
+	}
+	return lines.join("\n");
+}
+
 export function createTelegramNotifier(config: TelegramNotifierConfig) {
 	async function sendText(text: string): Promise<TelegramNotificationResult> {
 		if (!hasConfig(config)) {
@@ -299,6 +328,9 @@ export function createTelegramNotifier(config: TelegramNotifierConfig) {
 		},
 		notifyTlNotResponding(input: TlNotRespondingNotificationInput) {
 			return sendText(formatTlNotRespondingNotification(input));
+		},
+		notifyTlDailyMissedAnnouncements(input: TlDailyMissedAnnouncementsNotificationInput) {
+			return sendText(formatTlDailyMissedAnnouncementsNotification(input));
 		},
 	};
 }
