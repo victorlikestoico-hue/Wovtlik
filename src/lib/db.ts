@@ -1423,21 +1423,27 @@ export async function markTlReactionOldestPending(
  * Reportes que llevan >= firstAlertMinutes sin ninguna reacción de TL y todavía no se avisaron
  * (o se avisaron hace más de realertMinutes, para que el aviso de Telegram vaya insistiendo
  * mientras el reporte siga colgado en vez de avisar una sola vez y quedar en silencio).
+ *
+ * `since` acota a reportes creados desde ese momento en adelante — lo usa el checker para no
+ * empezar a avisar de reportes viejos (de días previos) que quedaron sin reacción/sin resolver
+ * de antes de este fix.
  */
 export async function listStaleUnreactedGroupFailureReports(
 	firstAlertMinutes: number,
 	realertMinutes: number,
+	since: Date,
 ): Promise<GroupFailureReportRow[]> {
 	await ensureSchemaInitialized();
 	const res = await pool.query<GroupFailureReportRow>(
 		`SELECT * FROM group_failure_reports
 		 WHERE tl_reacted_at IS NULL
 		   AND resolved = FALSE
+		   AND created_at >= $3
 		   AND created_at < NOW() - ($1::text || ' minutes')::interval
 		   AND (stale_alert_sent_at IS NULL OR stale_alert_sent_at < NOW() - ($2::text || ' minutes')::interval)
 		 ORDER BY created_at ASC
 		 LIMIT 50`,
-		[firstAlertMinutes, realertMinutes],
+		[firstAlertMinutes, realertMinutes, since],
 	);
 	return res.rows;
 }

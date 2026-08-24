@@ -2751,6 +2751,10 @@ const TL_STALE_FIRST_ALERT_MINUTES = 5;
 const TL_STALE_REALERT_MINUTES = 15;
 const TL_STALE_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 let staleTlCheckInterval: NodeJS.Timeout | null = null;
+// Momento en que arrancó este proceso: el checker sólo avisa de reportes creados desde acá en
+// adelante, para no bombardear Telegram con reportes viejos (de días previos) que quedaron sin
+// reacción/sin resolver desde antes de este deploy.
+const staleTlCheckerStartedAt = new Date();
 
 function formatUyTime(iso: string | null | undefined): string | null {
 	if (!iso) return null;
@@ -2778,7 +2782,11 @@ function formatUyTime(iso: string | null | undefined): string | null {
 async function checkStaleTlReactions(): Promise<void> {
 	let stale: GroupFailureReportRow[];
 	try {
-		stale = await listStaleUnreactedGroupFailureReports(TL_STALE_FIRST_ALERT_MINUTES, TL_STALE_REALERT_MINUTES);
+		stale = await listStaleUnreactedGroupFailureReports(
+			TL_STALE_FIRST_ALERT_MINUTES,
+			TL_STALE_REALERT_MINUTES,
+			staleTlCheckerStartedAt,
+		);
 	} catch (err) {
 		console.error("[fallas-group] Error consultando reportes sin reacción de TL:", err);
 		return;
