@@ -53,6 +53,7 @@ import {
 	notifyGroupFailureReport,
 	notifyBotDisconnected,
 	notifyDecryptionStorm,
+	notifyTlCoverageAnnounced,
 	logNearMissIntent,
 	insertGroupFailureReport,
 	markGroupFailureReportConfirmed,
@@ -1903,6 +1904,17 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 				console.log(
 					`[fallas-group] Anuncio de TL guardado: ${senderName} (${phone}) cubre [${announcedLobs.join(", ")}] por ${Math.round(ttlSeconds / 60)}min.`,
 				);
+				const startLabel = formatUyTime(new Date().toISOString()) ?? "ahora";
+				const endLabel = formatUyTime(new Date(Date.now() + ttlSeconds * 1000).toISOString()) ?? "";
+				notifyTlCoverageAnnounced({
+					start: startLabel,
+					end: endLabel,
+					lobs: announcedLobs,
+					name: senderName,
+					phone,
+				}).catch((err) => {
+					console.error("[fallas-group] Error avisando a Telegram del anuncio de TL:", err);
+				});
 			} catch (err) {
 				console.error("[fallas-group] Error guardando anuncio de TL:", err);
 			}
@@ -2744,11 +2756,12 @@ function stopOutboxProcessor() {
 	}
 }
 
-// Umbral para el primer aviso de "TL sin responder" y cada cuánto se reinsiste por Telegram
-// mientras el reporte siga sin reacción — evita mandar un solo aviso que se pierda en el chat y
-// después quedar en silencio si nadie lo atiende.
+// Umbral para el (único) aviso de "TL sin responder": se manda una sola vez, entre los 5 y los
+// 10 minutos de creado el reporte. Pasados los 10 minutos sin reacción se deja de insistir por
+// Telegram con ese reporte puntual — un aviso a tiempo alcanza, y bombardear el chat por reportes
+// viejos que el TL ya no va a atender solo genera ruido.
 const TL_STALE_FIRST_ALERT_MINUTES = 5;
-const TL_STALE_REALERT_MINUTES = 15;
+const TL_STALE_CUTOFF_MINUTES = 10;
 const TL_STALE_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 let staleTlCheckInterval: NodeJS.Timeout | null = null;
 // Momento en que arrancó este proceso: el checker sólo avisa de reportes creados desde acá en
@@ -2776,15 +2789,16 @@ function formatUyTime(iso: string | null | undefined): string | null {
  * corresponde el tiempo que se está acumulando ahí. Prioriza el anuncio manual del grupo (más
  * específico, lo escribió el TL mismo); si nadie anunció nada para ese LOB, cae al rooster de
  * Wolftls (ver wolftls-client.ts) — así el aviso sigue identificando al TL responsable aunque
- * jamás haya escrito "los acompaño con...". Se reinsiste cada TL_STALE_REALERT_MINUTES mientras
- * el reporte siga sin atender (ver listStaleUnreactedGroupFailureReports).
+ * jamás haya escrito "los acompaño con...". Es un aviso único por reporte: pasados
+ * TL_STALE_CUTOFF_MINUTES sin reacción se deja de considerar (ver
+ * listStaleUnreactedGroupFailureReports).
  */
 async function checkStaleTlReactions(): Promise<void> {
 	let stale: GroupFailureReportRow[];
 	try {
 		stale = await listStaleUnreactedGroupFailureReports(
 			TL_STALE_FIRST_ALERT_MINUTES,
-			TL_STALE_REALERT_MINUTES,
+			TL_STALE_CUTOFF_MINUTES,
 			staleTlCheckerStartedAt,
 		);
 	} catch (err) {
@@ -2813,7 +2827,12 @@ async function checkStaleTlReactions(): Promise<void> {
 		}
 
 		try {
-			await notifyTlNotResponding({
+			// notifyTlNotResponding no rechaza la promesa en un fallo de la API de Telegram (ver
+			// logIfTelegramNotificationFailed en db.ts) — devuelve `false`. Solo se marca el reporte
+			// como avisado si de verdad se mandó; si falla (ej. hipo de red puntual), se deja sin
+			// marcar para que el próximo tick (dentro de la ventana de TL_STALE_CUTOFF_MINUTES) lo
+			// vuelva a intentar en vez de perder el aviso en silencio para siempre.
+			const sent = await notifyTlNotResponding({
 				agentName: report.sender_name,
 				agentPhone: report.phone,
 				lob: report.lob,
@@ -2824,7 +2843,9 @@ async function checkStaleTlReactions(): Promise<void> {
 				tlUntil,
 				tlSource,
 			});
-			await markGroupFailureReportStaleAlertSent(report.id, new Date());
+			if (sent) {
+				await markGroupFailureReportStaleAlertSent(report.id, new Date());
+			}
 		} catch (err) {
 			console.error(`[fallas-group] Error avisando por Telegram que el TL no responde (reporte ${report.id}):`, err);
 		}

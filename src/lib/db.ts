@@ -791,6 +791,19 @@ export async function searchKnowledgeDocuments(
 	return res.rows;
 }
 
+// El notifier de Telegram nunca rechaza la promesa en un fallo de la API (HTTP 4xx/5xx, red, chat
+// mal configurado) — devuelve { ok: false, ... } para que el turno que llamó pueda seguir. Eso
+// significa que un simple try/catch alrededor de estas funciones NO detecta ese tipo de fallo (ver
+// tl-coverage-cron.ts, donde un `catch` así se quedó sin loguear nada el día que el aviso de
+// cobertura no llegó a Telegram pese a que el mensaje de WhatsApp sí salió). Este helper deja
+// rastro en los logs de Railway cada vez que el envío no se concreta, para no volver a depender de
+// "se ve en Telegram o no" para diagnosticar.
+function logIfTelegramNotificationFailed(tag: string, result: { ok: boolean; status: string; reason?: string }): void {
+	if (!result.ok) {
+		console.error(`[telegram] ${tag} no se envió (status=${result.status}, reason=${result.reason}).`);
+	}
+}
+
 // 23. notifyTelegramHumanNeeded
 export async function notifyTelegramHumanNeeded(input: {
 	conversation: { id: number; phone: string; jid?: string | null };
@@ -806,13 +819,14 @@ export async function notifyTelegramHumanNeeded(input: {
 		fetch: globalThis.fetch as any,
 	});
 
-	await notifier.notifyHumanoHandoff({
+	const result = await notifier.notifyHumanoHandoff({
 		conversationId: input.conversation.id,
 		phone: input.conversation.phone,
 		jid: input.conversation.jid || "",
 		reason: input.reason,
 		lastMessage: input.lastMessage,
 	});
+	logIfTelegramNotificationFailed("notifyTelegramHumanNeeded", result);
 }
 
 // notifyGroupFailureReport
@@ -835,7 +849,8 @@ export async function notifyGroupFailureReport(input: {
 		fetch: globalThis.fetch as any,
 	});
 
-	await notifier.notifyGroupFailureReport(input);
+	const result = await notifier.notifyGroupFailureReport(input);
+	logIfTelegramNotificationFailed("notifyGroupFailureReport", result);
 }
 
 export async function notifyBotDisconnected(minutesDisconnected: number): Promise<void> {
@@ -846,7 +861,8 @@ export async function notifyBotDisconnected(minutesDisconnected: number): Promis
 		chatId,
 		fetch: globalThis.fetch as any,
 	});
-	await notifier.notifyBotDisconnected({ minutesDisconnected });
+	const result = await notifier.notifyBotDisconnected({ minutesDisconnected });
+	logIfTelegramNotificationFailed("notifyBotDisconnected", result);
 }
 
 export async function notifyDecryptionStorm(failureCount: number, windowSeconds: number): Promise<void> {
@@ -857,7 +873,8 @@ export async function notifyDecryptionStorm(failureCount: number, windowSeconds:
 		chatId,
 		fetch: globalThis.fetch as any,
 	});
-	await notifier.notifyDecryptionStorm({ failureCount, windowSeconds });
+	const result = await notifier.notifyDecryptionStorm({ failureCount, windowSeconds });
+	logIfTelegramNotificationFailed("notifyDecryptionStorm", result);
 }
 
 export async function notifyTlCoverageAnnounced(input: {
@@ -874,7 +891,8 @@ export async function notifyTlCoverageAnnounced(input: {
 		chatId,
 		fetch: globalThis.fetch as any,
 	});
-	await notifier.notifyTlCoverageAnnounced(input);
+	const result = await notifier.notifyTlCoverageAnnounced(input);
+	logIfTelegramNotificationFailed("notifyTlCoverageAnnounced", result);
 }
 
 export async function notifyTlNotResponding(input: {
@@ -887,7 +905,7 @@ export async function notifyTlNotResponding(input: {
 	tlPhone: string | null;
 	tlUntil: string | null;
 	tlSource?: "anuncio" | "rooster";
-}): Promise<void> {
+}): Promise<boolean> {
 	const botToken = process.env.TELEGRAM_BOT_TOKEN;
 	const chatId = process.env.TELEGRAM_CHAT_ID;
 	const notifier = createTelegramNotifier({
@@ -895,7 +913,9 @@ export async function notifyTlNotResponding(input: {
 		chatId,
 		fetch: globalThis.fetch as any,
 	});
-	await notifier.notifyTlNotResponding(input);
+	const result = await notifier.notifyTlNotResponding(input);
+	logIfTelegramNotificationFailed("notifyTlNotResponding", result);
+	return result.ok;
 }
 
 // 24. updateConversation(id, patch)
@@ -1420,9 +1440,11 @@ export async function markTlReactionOldestPending(
 }
 
 /**
- * Reportes que llevan >= firstAlertMinutes sin ninguna reacción de TL y todavía no se avisaron
- * (o se avisaron hace más de realertMinutes, para que el aviso de Telegram vaya insistiendo
- * mientras el reporte siga colgado en vez de avisar una sola vez y quedar en silencio).
+ * Reportes que llevan >= firstAlertMinutes sin ninguna reacción de TL, todavía no se avisaron
+ * ni una vez, y no llevan más de cutoffMinutes esperando — pasado ese tope se deja de insistir
+ * por Telegram con ese reporte puntual (un solo aviso, entre firstAlertMinutes y cutoffMinutes
+ * de creado, es suficiente; no tiene sentido seguir bombardeando el chat por un reporte viejo que
+ * el TL nunca va a atender ya).
  *
  * `since` acota a reportes creados desde ese momento en adelante — lo usa el checker para no
  * empezar a avisar de reportes viejos (de días previos) que quedaron sin reacción/sin resolver
@@ -1430,7 +1452,7 @@ export async function markTlReactionOldestPending(
  */
 export async function listStaleUnreactedGroupFailureReports(
 	firstAlertMinutes: number,
-	realertMinutes: number,
+	cutoffMinutes: number,
 	since: Date,
 ): Promise<GroupFailureReportRow[]> {
 	await ensureSchemaInitialized();
@@ -1440,10 +1462,11 @@ export async function listStaleUnreactedGroupFailureReports(
 		   AND resolved = FALSE
 		   AND created_at >= $3
 		   AND created_at < NOW() - ($1::text || ' minutes')::interval
-		   AND (stale_alert_sent_at IS NULL OR stale_alert_sent_at < NOW() - ($2::text || ' minutes')::interval)
+		   AND created_at >= NOW() - ($2::text || ' minutes')::interval
+		   AND stale_alert_sent_at IS NULL
 		 ORDER BY created_at ASC
 		 LIMIT 50`,
-		[firstAlertMinutes, realertMinutes, since],
+		[firstAlertMinutes, cutoffMinutes, since],
 	);
 	return res.rows;
 }
