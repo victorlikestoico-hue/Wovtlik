@@ -877,6 +877,27 @@ export async function notifyTlCoverageAnnounced(input: {
 	await notifier.notifyTlCoverageAnnounced(input);
 }
 
+export async function notifyTlNotResponding(input: {
+	agentName: string;
+	agentPhone: string;
+	lob: string | null;
+	reason: string;
+	minutesWaiting: number;
+	tlName: string | null;
+	tlPhone: string | null;
+	tlUntil: string | null;
+	tlSource?: "anuncio" | "rooster";
+}): Promise<void> {
+	const botToken = process.env.TELEGRAM_BOT_TOKEN;
+	const chatId = process.env.TELEGRAM_CHAT_ID;
+	const notifier = createTelegramNotifier({
+		botToken,
+		chatId,
+		fetch: globalThis.fetch as any,
+	});
+	await notifier.notifyTlNotResponding(input);
+}
+
 // 24. updateConversation(id, patch)
 export async function updateConversation(
 	id: number,
@@ -1212,9 +1233,12 @@ export interface GroupFailureReportRow {
 	queued_offline: boolean;
 	tl_reacted_at: Date | null;
 	tl_reacted_by: string | null;
+	tl_reacted_by_email: string | null;
 	lob: string | null;
 	sheet_row: number | null;
 	sheet_spreadsheet_id: string | null;
+	whatsapp_message_id: string | null;
+	stale_alert_sent_at: Date | null;
 	created_at: Date;
 }
 
@@ -1225,13 +1249,22 @@ export async function insertGroupFailureReport(input: {
 	reason: string;
 	formStatus: "yes" | "no" | "unknown";
 	lob?: string | null;
+	whatsappMessageId?: string | null;
 }): Promise<GroupFailureReportRow> {
 	await ensureSchemaInitialized();
 	const res = await pool.query<GroupFailureReportRow>(
-		`INSERT INTO group_failure_reports (phone, sender_name, email, reason, form_status, lob)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO group_failure_reports (phone, sender_name, email, reason, form_status, lob, whatsapp_message_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING *`,
-		[input.phone, input.senderName, input.email ?? null, input.reason, input.formStatus, input.lob ?? null],
+		[
+			input.phone,
+			input.senderName,
+			input.email ?? null,
+			input.reason,
+			input.formStatus,
+			input.lob ?? null,
+			input.whatsappMessageId ?? null,
+		],
 	);
 	return res.rows[0];
 }
@@ -1283,13 +1316,22 @@ export async function markLatestGroupFailureReportResolved(phone: string): Promi
 }
 
 /**
- * Marca tl_reacted_at en el reporte sin reaccionar más reciente de cada agente distinto a
- * `phone` — se llama con cada mensaje del grupo de fallas. En la práctica el único que le
- * contesta a un reporte de desconexión ahí es el TL en turno, así que "el primer mensaje de
- * alguien más" funciona como proxy de "cuánto tardó el TL en reaccionar" sin necesidad de saber
- * de antemano quién es TL. Los mensajes que manda el propio bot nunca llegan a llamar esta
- * función (el listener los filtra por fromMe antes), así que no hace falta excluirlos acá.
- * Se acota a las últimas horas para no marcar de golpe reportes viejos al agregar la columna.
+ * Marcan tl_reacted_at cuando llega una reacción de WhatsApp en el grupo de fallas — reemplaza al
+ * viejo markTlReactionForOthers, que resolvía TODOS los reportes pendientes de CUALQUIER agente/LOB
+ * con una sola reacción (sin LIMIT, sin filtrar por LOB, sin validar que quien reaccionaba fuera
+ * realmente el TL). Eso hacía que una reacción del TL de un LOB le "robara" el tiempo de reacción a
+ * una desconexión de otro LOB que nadie había atendido. El caller (markTlReactionAndUpdateSheet en
+ * client.ts) ya valida antes de llamar a estas funciones que quien reaccionó es un TL identificado
+ * (correo en la whitelist o anuncio de cobertura vigente para el LOB) — acá solo queda resolver A LO
+ * SUMO un reporte por reacción, en este orden de precisión:
+ *   1) markGroupFailureReportReactedById — la reacción apunta a un mensaje puntual con reporte
+ *      asociado (whatsapp_message_id). Es el caso preciso: solo cierra ESE reporte.
+ *   2) markTlReactionForLobOldest — sin match de mensaje, pero el TL tiene cobertura anunciada
+ *      para uno o más LOB: cierra el reporte pendiente más viejo de esos LOB.
+ *   3) markTlReactionOldestPending — el TL está en la whitelist pero no tiene anuncio de LOB vigente:
+ *      cierra el pendiente más viejo de cualquier LOB (mejor que nada, pero es el fallback menos
+ *      preciso — de ahí que solo se use cuando ya se confirmó por whitelist que es TL de verdad).
+ * Todas se acotan a una ventana de horas para no marcar de golpe reportes viejos.
  */
 export interface TlReactionUpdateRow {
 	id: number;
@@ -1299,21 +1341,110 @@ export interface TlReactionUpdateRow {
 	created_at: Date;
 }
 
-export async function markTlReactionForOthers(
-	phone: string,
+export async function findGroupFailureReportByMessageId(
+	messageId: string,
+): Promise<GroupFailureReportRow | null> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<GroupFailureReportRow>(
+		`SELECT * FROM group_failure_reports
+		 WHERE whatsapp_message_id = $1 AND tl_reacted_at IS NULL
+		 ORDER BY created_at DESC
+		 LIMIT 1`,
+		[messageId],
+	);
+	return res.rows[0] ?? null;
+}
+
+export async function markGroupFailureReportReactedById(
+	id: number,
 	reactedAt: Date,
 	reactedByName: string,
-): Promise<TlReactionUpdateRow[]> {
+	reactedByEmail: string | null,
+): Promise<TlReactionUpdateRow | null> {
 	await ensureSchemaInitialized();
-	const cutoff = new Date(reactedAt.getTime() - 6 * 60 * 60 * 1000);
 	const res = await pool.query<TlReactionUpdateRow>(
 		`UPDATE group_failure_reports
-		 SET tl_reacted_at = $2, tl_reacted_by = $4
-		 WHERE phone != $1 AND tl_reacted_at IS NULL AND created_at > $3
+		 SET tl_reacted_at = $2, tl_reacted_by = $3, tl_reacted_by_email = $4
+		 WHERE id = $1 AND tl_reacted_at IS NULL
 		 RETURNING id, phone, sheet_row, sheet_spreadsheet_id, created_at`,
-		[phone, reactedAt, cutoff, reactedByName],
+		[id, reactedAt, reactedByName, reactedByEmail],
+	);
+	return res.rows[0] ?? null;
+}
+
+export async function markTlReactionForLobOldest(
+	reactorPhone: string,
+	lobs: string[],
+	reactedAt: Date,
+	reactedByName: string,
+	reactedByEmail: string | null,
+	cutoff: Date,
+): Promise<TlReactionUpdateRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<TlReactionUpdateRow>(
+		`UPDATE group_failure_reports
+		 SET tl_reacted_at = $2, tl_reacted_by = $3, tl_reacted_by_email = $4
+		 WHERE id = (
+		   SELECT id FROM group_failure_reports
+		   WHERE phone != $1 AND tl_reacted_at IS NULL AND created_at > $5 AND lob = ANY($6::text[])
+		   ORDER BY created_at ASC
+		   LIMIT 1
+		 )
+		 RETURNING id, phone, sheet_row, sheet_spreadsheet_id, created_at`,
+		[reactorPhone, reactedAt, reactedByName, reactedByEmail, cutoff, lobs],
 	);
 	return res.rows;
+}
+
+export async function markTlReactionOldestPending(
+	reactorPhone: string,
+	reactedAt: Date,
+	reactedByName: string,
+	reactedByEmail: string | null,
+	cutoff: Date,
+): Promise<TlReactionUpdateRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<TlReactionUpdateRow>(
+		`UPDATE group_failure_reports
+		 SET tl_reacted_at = $2, tl_reacted_by = $3, tl_reacted_by_email = $4
+		 WHERE id = (
+		   SELECT id FROM group_failure_reports
+		   WHERE phone != $1 AND tl_reacted_at IS NULL AND created_at > $5
+		   ORDER BY created_at ASC
+		   LIMIT 1
+		 )
+		 RETURNING id, phone, sheet_row, sheet_spreadsheet_id, created_at`,
+		[reactorPhone, reactedAt, reactedByName, reactedByEmail, cutoff],
+	);
+	return res.rows;
+}
+
+/**
+ * Reportes que llevan >= firstAlertMinutes sin ninguna reacción de TL y todavía no se avisaron
+ * (o se avisaron hace más de realertMinutes, para que el aviso de Telegram vaya insistiendo
+ * mientras el reporte siga colgado en vez de avisar una sola vez y quedar en silencio).
+ */
+export async function listStaleUnreactedGroupFailureReports(
+	firstAlertMinutes: number,
+	realertMinutes: number,
+): Promise<GroupFailureReportRow[]> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<GroupFailureReportRow>(
+		`SELECT * FROM group_failure_reports
+		 WHERE tl_reacted_at IS NULL
+		   AND resolved = FALSE
+		   AND created_at < NOW() - ($1::text || ' minutes')::interval
+		   AND (stale_alert_sent_at IS NULL OR stale_alert_sent_at < NOW() - ($2::text || ' minutes')::interval)
+		 ORDER BY created_at ASC
+		 LIMIT 50`,
+		[firstAlertMinutes, realertMinutes],
+	);
+	return res.rows;
+}
+
+export async function markGroupFailureReportStaleAlertSent(id: number, at: Date): Promise<void> {
+	await ensureSchemaInitialized();
+	await pool.query("UPDATE group_failure_reports SET stale_alert_sent_at = $2 WHERE id = $1", [id, at]);
 }
 
 export async function listGroupFailureReports(limit = 100): Promise<GroupFailureReportRow[]> {

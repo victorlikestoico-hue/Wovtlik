@@ -57,7 +57,14 @@ import {
 	insertGroupFailureReport,
 	markGroupFailureReportConfirmed,
 	markLatestGroupFailureReportResolved,
-	markTlReactionForOthers,
+	findGroupFailureReportByMessageId,
+	markGroupFailureReportReactedById,
+	markTlReactionForLobOldest,
+	markTlReactionOldestPending,
+	listStaleUnreactedGroupFailureReports,
+	markGroupFailureReportStaleAlertSent,
+	notifyTlNotResponding,
+	type GroupFailureReportRow,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
 import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, logNoConnectionReport, updatePendingOfflineReaction, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
@@ -67,6 +74,7 @@ import { outboxDestinationForConversation } from "../outbox-routing.ts";
 import { type SendKind } from "../send-pacing.ts";
 import { enqueueSocketSend, getQueuedSendCount, setSendDelayMultiplierProvider } from "../send-queue.ts";
 import { markSessionLinked, getWarmupPhase, warmupDelayMultiplier } from "../warmup-throttle.ts";
+import { getScheduledTlForLob, WOLFTLS_COVERED_LOBS } from "../wolftls-client.ts";
 
 // El pacing entre envíos se alarga automáticamente durante el período de calentamiento
 // posterior a cualquier relogin con sesión nueva (ver warmup-throttle.ts).
@@ -563,6 +571,73 @@ const TL_ANNOUNCEMENT_EXTRA_LOBS = ["aj", "rv", "pdi", "fr", "im", "lg", "out", 
 const TL_ANNOUNCEMENT_QUERYABLE_LOBS = ["cs", "sm", "po", "go", "ov", ...TL_ANNOUNCEMENT_EXTRA_LOBS];
 const TL_ANNOUNCEMENT_CAP_SECONDS = 14 * 60 * 60;
 
+// Correos corporativos de los TL — única fuente de verdad de "quién es TL" para no dejar que la
+// reacción de un agente cualquiera en el grupo de fallas cuente como reacción de TL (ver
+// markTlReactionAndUpdateSheet). El teléfono de quien reacciona se resuelve a un correo vía
+// agent_profiles (mismo mapping que usa el resto del bot) y se valida contra esta lista.
+const TL_KNOWN_EMAILS = new Set([
+	"daniela.perez_ndo.ext@pedidosya.com",
+	"paola.aguilar_ndo.ext@pedidosya.com",
+	"maria.villamizar_ndo.ext@pedidosya.com",
+	"esteban.ospina_ndo.ext@pedidosya.com",
+	"luz.rodriguez_ndo.ext@pedidosya.com",
+	"merlin.lopez_ndo.ext@pedidosya.com",
+	"andrea.fernandez_ndo.ext@pedidosya.com",
+	"luis.aguilar_ndo.ext@pedidosya.com",
+	"diana.duran_ndo.ext@pedidosya.com",
+	"jineth.basallo_ndo.ext@pedidosya.com",
+	"andres.rojas_ndo.ext@pedidosya.com",
+	"carlos.infante_ndo.ext@pedidosya.com",
+	"carlos.rodriguez_ndo.ext@pedidosya.com",
+	"victor.garces_ndo.ext@pedidosya.com",
+	"dassy.angulos_ndo.ext@pedidosya.com",
+	"kevin.jimenez_ndo.ext@pedidosya.com",
+	"ana.sierra_ndo.ext@pedidosya.com",
+	"angelica.gomez_ndo.ext@pedidosya.com",
+	"julieth.roa_ndo.ext@pedidosya.com",
+	"lorena.saen_ndo.ext@pedidosya.com",
+	"valentina.gonzalez_ndo.ext@pedidosya.com",
+	"paola.paz_ndo.ext@pedidosya.com",
+	"maria.chia_ndo.ext@pedidosya.com",
+]);
+
+/** LOB que `phone` tiene anunciados como cobertura vigente ahora mismo (ver saveTlAnnouncement). */
+async function findActiveTlLobsForPhone(phone: string): Promise<string[]> {
+	const lobs: string[] = [];
+	await Promise.all(
+		TL_ANNOUNCEMENT_QUERYABLE_LOBS.map(async (lob) => {
+			const announcement = await getTlAnnouncement(lob).catch(() => null);
+			if (announcement?.phone === phone) lobs.push(lob);
+		}),
+	);
+	return lobs;
+}
+
+/** Correo registrado (agent_profiles) para `phone`, sin validar todavía si es TL — ver
+ * resolveReactorTlIdentity, que cruza esto contra TL_KNOWN_EMAILS y el rooster de Wolftls. */
+async function resolveReactorProfileEmail(phone: string): Promise<string | null> {
+	const profile = await getAgentProfile(phone).catch(() => null);
+	return profile?.email ?? null;
+}
+
+/**
+ * LOB de WOLFTLS_COVERED_LOBS que el rooster de Wolftls dice que `email` debería estar cubriendo
+ * ahora mismo — fuente de verdad adicional a los anuncios manuales del grupo (ver
+ * findActiveTlLobsForPhone). Si Wolftls no está configurado o `email` es null, devuelve [].
+ */
+async function findScheduledLobsForEmail(email: string | null): Promise<string[]> {
+	if (!email) return [];
+	const normalized = email.toLowerCase();
+	const lobs: string[] = [];
+	await Promise.all(
+		WOLFTLS_COVERED_LOBS.map(async (lob) => {
+			const scheduled = await getScheduledTlForLob(lob).catch(() => null);
+			if (scheduled?.email === normalized) lobs.push(lob);
+		}),
+	);
+	return lobs;
+}
+
 /** "los acompaño con...", "les acompaño...", "a partir de este momento los acompaño..." */
 function isTlAnnouncementMessage(text: string): boolean {
 	return /acompañ/i.test(text);
@@ -611,12 +686,22 @@ function computeTlAnnouncementTtlSeconds(text: string, now: Date): number {
 	return Math.min(Math.max(ttlSeconds, 60), TL_ANNOUNCEMENT_CAP_SECONDS);
 }
 
-type TlAnnouncement = { phone: string; name: string; jid: string };
+type TlAnnouncement = { phone: string; name: string; jid: string; until: string };
 const tlAnnouncementKey = (lob: string) => `bot:tl_announcement:${lob}`;
 
-/** Un anuncio nuevo para el mismo LOB siempre reemplaza al anterior (mismo SET, misma key). */
-async function saveTlAnnouncement(lob: string, announcement: TlAnnouncement, ttlSeconds: number): Promise<void> {
-	await redisClient.set(tlAnnouncementKey(lob), JSON.stringify(announcement), "EX", ttlSeconds);
+/**
+ * Un anuncio nuevo para el mismo LOB siempre reemplaza al anterior (mismo SET, misma key).
+ * `until` (hora de fin en ISO) se guarda junto al anuncio para poder mostrarla en el aviso de
+ * Telegram de "TL sin responder" (ver checkStaleTlReactions) sin tener que recalcularla a partir
+ * del TTL restante.
+ */
+async function saveTlAnnouncement(
+	lob: string,
+	announcement: Omit<TlAnnouncement, "until">,
+	ttlSeconds: number,
+): Promise<void> {
+	const until = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+	await redisClient.set(tlAnnouncementKey(lob), JSON.stringify({ ...announcement, until }), "EX", ttlSeconds);
 }
 
 async function getTlAnnouncement(lob: string): Promise<TlAnnouncement | null> {
@@ -1481,7 +1566,7 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 
 	let reportId: number | null = null;
 	try {
-		const saved = await insertGroupFailureReport({ phone, senderName, email, reason, formStatus, lob });
+		const saved = await insertGroupFailureReport({ phone, senderName, email, reason, formStatus, lob, whatsappMessageId: lastMsgKey?.id ?? null });
 		reportId = saved.id;
 	} catch (err) {
 		console.error("[fallas-group] Error guardando el reporte en la base:", err);
@@ -1566,7 +1651,7 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 
 	let reportId: number | null = null;
 	try {
-		const saved = await insertGroupFailureReport({ phone, senderName, email, reason: motivo, formStatus: "unknown" });
+		const saved = await insertGroupFailureReport({ phone, senderName, email, reason: motivo, formStatus: "unknown", whatsappMessageId: lastMsgKey?.id ?? null });
 		reportId = saved.id;
 	} catch (err) {
 		console.error("[fallas-group] Error guardando el reporte de corrección de ausencia:", err);
@@ -1664,7 +1749,7 @@ async function processCannotConnectReport(phone: string, senderName: string, las
 
 	let reportId: number | null = null;
 	try {
-		const saved = await insertGroupFailureReport({ phone, senderName, email, reason: motivo, formStatus: "unknown", lob });
+		const saved = await insertGroupFailureReport({ phone, senderName, email, reason: motivo, formStatus: "unknown", lob, whatsappMessageId: lastMsgKey?.id ?? null });
 		reportId = saved.id;
 	} catch (err) {
 		console.error("[fallas-group] Error guardando el reporte de no conexión a turno:", err);
@@ -1701,30 +1786,78 @@ async function processCannotConnectReport(phone: string, senderName: string, las
 }
 
 /**
- * Marca que el TL reaccionó (reacción de WhatsApp) y, para cada reporte que haya quedado
- * marcado, actualiza los segundos transcurridos en su fila del sheet "pending_offline".
- * Solo cuenta la reacción de WhatsApp (👍, ✅, etc.), no mensajes de texto: un mensaje de
- * texto en el grupo puede ser otro agente reportando su propia falla, no el TL respondiendo
- * a esta. Los mensajes/reacciones que manda el propio bot (fromMe) nunca llegan a esta
- * función (ver el filtro del listener más abajo), así que nunca se cuentan como si el "TL"
- * fuera el bot.
+ * Marca que el TL reaccionó (reacción de WhatsApp) y, para el reporte que haya quedado marcado,
+ * actualiza los segundos transcurridos en su fila del sheet "pending_offline". Solo cuenta la
+ * reacción de WhatsApp (👍, ✅, etc.), no mensajes de texto: un mensaje de texto en el grupo puede
+ * ser otro agente reportando su propia falla, no el TL respondiendo a esta. Los mensajes/reacciones
+ * que manda el propio bot (fromMe) nunca llegan a esta función (ver el filtro del listener más
+ * abajo), así que nunca se cuentan como si el "TL" fuera el bot.
+ *
+ * Antes de tocar cualquier reporte se valida que quien reaccionó sea un TL identificado, por
+ * cualquiera de tres vías: correo en TL_KNOWN_EMAILS, cobertura anunciada vigente en el grupo
+ * (findActiveTlLobsForPhone), o cobertura vigente según el rooster de Wolftls
+ * (findScheduledLobsForEmail — ver wolftls-client.ts) — si ninguna aplica, la reacción se ignora
+ * por completo: un agente cualquiera reaccionando en el grupo ya no le "roba" tiempo de reacción a
+ * un reporte ajeno. Con la identidad ya validada, se resuelve el reporte en orden de precisión
+ * decreciente: 1) el mensaje puntual reaccionado, si tiene reporte asociado; 2) si el TL tiene LOB
+ * anunciados o programados en el rooster, el pendiente más viejo de esos LOB; 3) si no, el
+ * pendiente más viejo de cualquier LOB (fallback, solo llega acá si la identidad ya viene
+ * confirmada por whitelist).
  */
-function markTlReactionAndUpdateSheet(phone: string, reactedByName: string): void {
-	markTlReactionForOthers(phone, new Date(), reactedByName)
-		.then(async (rows) => {
-			if (rows.length === 0) return;
-			const fallbackSheetId = ((await getSettings().catch(() => ({} as Record<string, unknown>))).offline_queue_sheet_id as string) || "";
-			for (const row of rows) {
-				if (row.sheet_row == null) continue;
-				const spreadsheetId = row.sheet_spreadsheet_id || fallbackSheetId;
-				if (!spreadsheetId) continue;
-				const seconds = Math.round((Date.now() - row.created_at.getTime()) / 1000);
-				updatePendingOfflineReaction(spreadsheetId, row.sheet_row, seconds, reactedByName).catch((err) =>
-					console.error("[fallas-group] Error actualizando segundos de reacción en el sheet:", err),
-				);
+async function markTlReactionAndUpdateSheet(
+	phone: string,
+	reactedByName: string,
+	targetMessageId?: string | null,
+): Promise<void> {
+	try {
+		const [rawEmail, announcedLobs] = await Promise.all([
+			resolveReactorProfileEmail(phone),
+			findActiveTlLobsForPhone(phone),
+		]);
+		const isWhitelisted = !!rawEmail && TL_KNOWN_EMAILS.has(rawEmail.toLowerCase());
+		const scheduledLobs = await findScheduledLobsForEmail(rawEmail);
+		const effectiveLobs = [...new Set([...announcedLobs, ...scheduledLobs])];
+		const isKnownTl = isWhitelisted || effectiveLobs.length > 0;
+		if (!isKnownTl) {
+			console.log(
+				`[fallas-group] Reacción ignorada: ${reactedByName} (${phone}) no está identificado como TL (sin correo en la lista, sin cobertura anunciada, sin cobertura en el rooster de Wolftls).`,
+			);
+			return;
+		}
+		const tlEmail = isKnownTl ? rawEmail : null;
+
+		const reactedAt = new Date();
+		let rows: Array<{ id: number; phone: string; sheet_row: number | null; sheet_spreadsheet_id: string | null; created_at: Date }> = [];
+
+		if (targetMessageId) {
+			const report = await findGroupFailureReportByMessageId(targetMessageId);
+			if (report && report.phone !== phone) {
+				const updated = await markGroupFailureReportReactedById(report.id, reactedAt, reactedByName, tlEmail);
+				if (updated) rows = [updated];
 			}
-		})
-		.catch((err) => console.error("[fallas-group] Error marcando reacción de TL:", err));
+		}
+
+		if (rows.length === 0) {
+			const cutoff = new Date(reactedAt.getTime() - 6 * 60 * 60 * 1000);
+			rows = effectiveLobs.length > 0
+				? await markTlReactionForLobOldest(phone, effectiveLobs, reactedAt, reactedByName, tlEmail, cutoff)
+				: await markTlReactionOldestPending(phone, reactedAt, reactedByName, tlEmail, cutoff);
+		}
+
+		if (rows.length === 0) return;
+		const fallbackSheetId = ((await getSettings().catch(() => ({} as Record<string, unknown>))).offline_queue_sheet_id as string) || "";
+		for (const row of rows) {
+			if (row.sheet_row == null) continue;
+			const spreadsheetId = row.sheet_spreadsheet_id || fallbackSheetId;
+			if (!spreadsheetId) continue;
+			const seconds = Math.round((reactedAt.getTime() - row.created_at.getTime()) / 1000);
+			updatePendingOfflineReaction(spreadsheetId, row.sheet_row, seconds, reactedByName).catch((err) =>
+				console.error("[fallas-group] Error actualizando segundos de reacción en el sheet:", err),
+			);
+		}
+	} catch (err) {
+		console.error("[fallas-group] Error marcando reacción de TL:", err);
+	}
 }
 
 /** Detecta un mensaje del grupo de fallas y programa su procesamiento agregado por agente. */
@@ -1738,7 +1871,8 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// (extractGroupMessageText da ""), así que se resuelve acá antes de exigir texto — muchos TL
 	// solo reaccionan al reporte en vez de responder con un mensaje.
 	if (msg.message?.reactionMessage) {
-		markTlReactionAndUpdateSheet(phone, senderName);
+		const targetMessageId = msg.message.reactionMessage.key?.id as string | undefined;
+		void markTlReactionAndUpdateSheet(phone, senderName, targetMessageId);
 		return;
 	}
 
@@ -2610,6 +2744,92 @@ function stopOutboxProcessor() {
 	}
 }
 
+// Umbral para el primer aviso de "TL sin responder" y cada cuánto se reinsiste por Telegram
+// mientras el reporte siga sin reacción — evita mandar un solo aviso que se pierda en el chat y
+// después quedar en silencio si nadie lo atiende.
+const TL_STALE_FIRST_ALERT_MINUTES = 5;
+const TL_STALE_REALERT_MINUTES = 15;
+const TL_STALE_CHECK_INTERVAL_MS = 2 * 60 * 1000;
+let staleTlCheckInterval: NodeJS.Timeout | null = null;
+
+function formatUyTime(iso: string | null | undefined): string | null {
+	if (!iso) return null;
+	try {
+		return new Date(iso).toLocaleTimeString("es-UY", {
+			timeZone: "America/Montevideo",
+			hour: "2-digit",
+			minute: "2-digit",
+		});
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Corre cada TL_STALE_CHECK_INTERVAL_MS: busca reportes del grupo de fallas sin ninguna reacción
+ * de TL desde hace TL_STALE_FIRST_ALERT_MINUTES y avisa por Telegram, arrobando quién es el TL en
+ * turno para ese LOB y hasta qué hora dijo (o le tocaba) cubrir — para que quede claro a quién
+ * corresponde el tiempo que se está acumulando ahí. Prioriza el anuncio manual del grupo (más
+ * específico, lo escribió el TL mismo); si nadie anunció nada para ese LOB, cae al rooster de
+ * Wolftls (ver wolftls-client.ts) — así el aviso sigue identificando al TL responsable aunque
+ * jamás haya escrito "los acompaño con...". Se reinsiste cada TL_STALE_REALERT_MINUTES mientras
+ * el reporte siga sin atender (ver listStaleUnreactedGroupFailureReports).
+ */
+async function checkStaleTlReactions(): Promise<void> {
+	let stale: GroupFailureReportRow[];
+	try {
+		stale = await listStaleUnreactedGroupFailureReports(TL_STALE_FIRST_ALERT_MINUTES, TL_STALE_REALERT_MINUTES);
+	} catch (err) {
+		console.error("[fallas-group] Error consultando reportes sin reacción de TL:", err);
+		return;
+	}
+
+	for (const report of stale) {
+		const minutesWaiting = Math.round((Date.now() - report.created_at.getTime()) / 60000);
+		const announcement = report.lob ? await getTlAnnouncement(report.lob).catch(() => null) : null;
+
+		let tlName = announcement?.name ?? null;
+		let tlPhone = announcement?.phone ?? null;
+		let tlUntil = formatUyTime(announcement?.until);
+		let tlSource: "anuncio" | "rooster" | undefined = announcement ? "anuncio" : undefined;
+
+		if (!announcement && report.lob) {
+			const scheduled = await getScheduledTlForLob(report.lob).catch(() => null);
+			if (scheduled) {
+				const scheduledProfile = await getAgentProfileByEmail(scheduled.email).catch(() => null);
+				tlName = scheduled.email;
+				tlPhone = scheduledProfile?.phone ?? null;
+				tlUntil = scheduled.until;
+				tlSource = "rooster";
+			}
+		}
+
+		try {
+			await notifyTlNotResponding({
+				agentName: report.sender_name,
+				agentPhone: report.phone,
+				lob: report.lob,
+				reason: report.reason,
+				minutesWaiting,
+				tlName,
+				tlPhone,
+				tlUntil,
+				tlSource,
+			});
+			await markGroupFailureReportStaleAlertSent(report.id, new Date());
+		} catch (err) {
+			console.error(`[fallas-group] Error avisando por Telegram que el TL no responde (reporte ${report.id}):`, err);
+		}
+	}
+}
+
+function startStaleTlReactionChecker() {
+	if (staleTlCheckInterval) return;
+	staleTlCheckInterval = setInterval(() => {
+		void checkStaleTlReactions();
+	}, TL_STALE_CHECK_INTERVAL_MS);
+}
+
 async function refreshAllProfilePictures() {
 	if (!globalSock) return;
 	try {
@@ -2792,6 +3012,7 @@ export async function startWASocket() {
 			});
 
 			startOutboxProcessor();
+			startStaleTlReactionChecker();
 			void refreshAllProfilePictures();
 
 			if (profilePicInterval) clearInterval(profilePicInterval);

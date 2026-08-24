@@ -68,6 +68,20 @@ export interface GroupFailureReportNotificationInput {
 	failureType?: string;
 }
 
+export interface TlNotRespondingNotificationInput {
+	agentName: string;
+	agentPhone: string;
+	lob: string | null;
+	reason: string;
+	minutesWaiting: number;
+	tlName: string | null;
+	tlPhone: string | null;
+	tlUntil: string | null;
+	/** "anuncio" = el TL lo escribió a mano en el grupo; "rooster" = viene del rooster de Wolftls
+	 * (nadie anunció nada, pero según el cálculo de turnos debería estar cubriendo). */
+	tlSource?: "anuncio" | "rooster";
+}
+
 export type TelegramNotificationResult =
 	| {
 			ok: true;
@@ -190,6 +204,29 @@ export function formatTlCoverageAnnouncedNotification(
 	].join("\n");
 }
 
+export function formatTlNotRespondingNotification(
+	input: TlNotRespondingNotificationInput,
+): string {
+	const lines = [
+		"⏰ <b>TL sin responder</b>",
+		`Agente: ${escapeHtml(input.agentName)} (${escapeHtml(input.agentPhone)})`,
+		`LOB: ${input.lob ? escapeHtml(input.lob.toUpperCase()) : "no identificado"}`,
+		`Motivo: ${escapeHtml(input.reason.slice(0, 200))}`,
+		`Lleva ${escapeHtml(input.minutesWaiting)} min sin ninguna reacción de TL.`,
+	];
+	if (input.tlName) {
+		const until = input.tlUntil ? ` hasta las ${escapeHtml(input.tlUntil)} UY` : "";
+		const phone = input.tlPhone ? ` (${escapeHtml(input.tlPhone)})` : "";
+		const sourceLabel = input.tlSource === "rooster"
+			? " — según el rooster de Wolftls, nadie lo anunció en el grupo"
+			: "";
+		lines.push(`TL en turno: ${escapeHtml(input.tlName)}${phone}${until}${sourceLabel}, pero no reaccionó.`);
+	} else {
+		lines.push("Nadie anunció cobertura para este LOB en el grupo de fallas.");
+	}
+	return lines.join("\n");
+}
+
 export function createTelegramNotifier(config: TelegramNotifierConfig) {
 	async function sendText(text: string): Promise<TelegramNotificationResult> {
 		if (!hasConfig(config)) {
@@ -259,6 +296,9 @@ export function createTelegramNotifier(config: TelegramNotifierConfig) {
 		},
 		notifyTlCoverageAnnounced(input: TlCoverageAnnouncedNotificationInput) {
 			return sendText(formatTlCoverageAnnouncedNotification(input));
+		},
+		notifyTlNotResponding(input: TlNotRespondingNotificationInput) {
+			return sendText(formatTlNotRespondingNotification(input));
 		},
 	};
 }

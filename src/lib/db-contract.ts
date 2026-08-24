@@ -412,6 +412,10 @@ ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS lob TEXT DEFAULT NULL
 ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS sheet_row INTEGER DEFAULT NULL;
 ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS sheet_spreadsheet_id TEXT DEFAULT NULL;
 ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS tl_reacted_by TEXT DEFAULT NULL;
+ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS whatsapp_message_id TEXT DEFAULT NULL;
+ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS tl_reacted_by_email TEXT DEFAULT NULL;
+ALTER TABLE group_failure_reports ADD COLUMN IF NOT EXISTS stale_alert_sent_at TIMESTAMP WITH TIME ZONE DEFAULT NULL;
+CREATE INDEX IF NOT EXISTS idx_group_failure_reports_whatsapp_message_id ON group_failure_reports(whatsapp_message_id);
 
 CREATE TABLE IF NOT EXISTS agents_master (
   id SERIAL PRIMARY KEY,
