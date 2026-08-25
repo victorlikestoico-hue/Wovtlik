@@ -1922,17 +1922,23 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 				).catch((err) => {
 					console.error("[fallas-group] Error guardando historial persistente de anuncio de TL:", err);
 				});
-				const startLabel = formatUyTime(new Date().toISOString()) ?? "ahora";
-				const endLabel = formatUyTime(new Date(Date.now() + ttlSeconds * 1000).toISOString()) ?? "";
-				notifyTlCoverageAnnounced({
-					start: startLabel,
-					end: endLabel,
-					lobs: announcedLobs,
-					name: senderName,
-					phone,
-				}).catch((err) => {
-					console.error("[fallas-group] Error avisando a Telegram del anuncio de TL:", err);
-				});
+				// El aviso a Telegram de "se anunció cobertura" es solo para el propio anuncio del
+				// dueño del bot (tl_coverage_phone en Ajustes) — el resto de los TL anunciándose
+				// en el grupo es tráfico normal del día a día y no debe generar ruido en Telegram.
+				const ownPhone = ((await getSettings().catch(() => ({} as Record<string, unknown>))).tl_coverage_phone as string || "").replace(/\D/g, "");
+				if (ownPhone && phone === ownPhone) {
+					const startLabel = formatUyTime(new Date().toISOString()) ?? "ahora";
+					const endLabel = formatUyTime(new Date(Date.now() + ttlSeconds * 1000).toISOString()) ?? "";
+					notifyTlCoverageAnnounced({
+						start: startLabel,
+						end: endLabel,
+						lobs: announcedLobs,
+						name: senderName,
+						phone,
+					}).catch((err) => {
+						console.error("[fallas-group] Error avisando a Telegram del anuncio de TL:", err);
+					});
+				}
 			} catch (err) {
 				console.error("[fallas-group] Error guardando anuncio de TL:", err);
 			}
@@ -2113,7 +2119,14 @@ async function handleFallasGroupMessage(msg: any): Promise<void> {
 	// alcanza con EMAIL_REGEX para cubrir tanto el correo completo como el "nombre.apellido" suelto.
 	const hasEmailSignal = EMAIL_REGEX.test(text);
 	if (!hasFailureKeyword && !hasGroupOfflineSignal && !hasEmailSignal && !hasActiveReport) {
-		// No matcheó ninguna señal de falla. Loguear near-misses de otras categorías.
+		// No matcheó ninguna señal de falla. Si quien escribió es un TL identificado, este texto
+		// suelto (ej. "dale, ya lo estoy viendo", "gracias") cuenta como respuesta al reporte
+		// pendiente más viejo de su LOB — mismo criterio que ya se usa para una reacción ✅, para
+		// que un TL que responde con texto en vez de reaccionar no siga apareciendo como "sin
+		// responder" en el aviso de Telegram (markTlReactionAndUpdateSheet valida la identidad y
+		// no hace nada si no está identificado como TL).
+		void markTlReactionAndUpdateSheet(phone, senderName);
+		// Loguear near-misses de otras categorías.
 		if (nearMissCategoriesForGroup.length > 0) {
 			logNearMissIntent({
 				conversationId: null,
