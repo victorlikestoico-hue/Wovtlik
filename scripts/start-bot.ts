@@ -153,6 +153,19 @@ async function main() {
 					continue;
 				}
 
+				// Reclamamos el archivo ANTES de encolar el envío (rename síncrono, no async):
+				// sendViaGlobalSock puede tardar más de los 1000ms del tick porque pasa por la
+				// cola paceada (send-queue/warmup-throttle) y el setInterval no espera a que
+				// termine el tick anterior. Si borráramos recién en el finally, un tick
+				// posterior podía volver a leer este mismo .json todavía presente y reenviar el
+				// mismo anuncio (incidente 2026-08-25: mismo anuncio al grupo Fraude x3).
+				const claimedPath = `${filePath}.processing`;
+				try {
+					fs.renameSync(filePath, claimedPath);
+				} catch {
+					continue; // otro tick ya se lo llevó
+				}
+
 				try {
 					const { jid, text, attachment } = parsed;
 					const content = attachment
@@ -169,7 +182,7 @@ async function main() {
 					console.error(`[bot-process] Error enviando anuncio manual (${file}):`, error);
 				} finally {
 					try {
-						fs.unlinkSync(filePath);
+						fs.unlinkSync(claimedPath);
 					} catch {
 						// noop
 					}
