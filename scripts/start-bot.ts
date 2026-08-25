@@ -1,11 +1,15 @@
 // scripts/env-loader.ts DEBE ser el primer import para popular process.env antes de que otros módulos lo lean
 import "./env-loader.ts";
 import fs from "node:fs";
+import path from "node:path";
 import { Worker } from "node:worker_threads";
-import { startWASocket, shutdownWASocket } from "../src/lib/baileys/client.ts";
+import { startWASocket, shutdownWASocket, listAllGroups, sendViaGlobalSock } from "../src/lib/baileys/client.ts";
 import {
 	getDestructiveRestartFlagPath,
 	getSoftRestartFlagPath,
+	getGroupListRequestFlagPath,
+	getGroupListResultPath,
+	getPendingAnnouncementsDir,
 } from "../src/lib/runtime-paths.ts";
 import { startDashBigReportsCron } from "./dashbig-reports-cron.ts";
 import { startAppointmentsCron } from "./appointments-cron.ts";
@@ -104,6 +108,45 @@ async function main() {
 					"[bot-process] Error durante el reinicio suave:",
 					error,
 				);
+			}
+		}
+
+		const groupListRequestFlagPath = getGroupListRequestFlagPath();
+		if (fs.existsSync(groupListRequestFlagPath)) {
+			try {
+				fs.unlinkSync(groupListRequestFlagPath);
+			} catch {
+				// noop
+			}
+			try {
+				const groups = await listAllGroups();
+				fs.writeFileSync(getGroupListResultPath(), JSON.stringify({ ok: true, groups }));
+			} catch (error: any) {
+				fs.writeFileSync(
+					getGroupListResultPath(),
+					JSON.stringify({ ok: false, error: error?.message || String(error) }),
+				);
+			}
+		}
+
+		const pendingAnnouncementsDir = getPendingAnnouncementsDir();
+		if (fs.existsSync(pendingAnnouncementsDir)) {
+			for (const file of fs.readdirSync(pendingAnnouncementsDir)) {
+				if (!file.endsWith(".json")) continue;
+				const filePath = path.join(pendingAnnouncementsDir, file);
+				try {
+					const { jid, text } = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+					await sendViaGlobalSock(jid, { text }, { kind: "cron" });
+					console.log(`[bot-process] Anuncio manual enviado a ${jid}.`);
+				} catch (error) {
+					console.error(`[bot-process] Error enviando anuncio manual (${file}):`, error);
+				} finally {
+					try {
+						fs.unlinkSync(filePath);
+					} catch {
+						// noop
+					}
+				}
 			}
 		}
 

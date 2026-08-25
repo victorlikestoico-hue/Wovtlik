@@ -2388,6 +2388,20 @@ export async function sendViaGlobalSock(
 	}, opts);
 }
 
+// Diagnóstico puntual (ver .list-groups-request en start-bot.ts): lista todos los grupos donde
+// participa la cuenta conectada, para identificar el gid de un grupo nuevo sin adivinar por logs.
+export async function listAllGroups(): Promise<Array<{ id: string; subject: string; participantsCount: number }>> {
+	if (!globalSock || !isSocketConnected) {
+		throw new Error("[bot] Socket no conectado o no listo. No se puede listar grupos.");
+	}
+	const groups = await globalSock.groupFetchAllParticipating();
+	return Object.values(groups).map((g) => ({
+		id: g.id,
+		subject: g.subject,
+		participantsCount: g.participants?.length ?? 0,
+	}));
+}
+
 // Creamos el Inbound Handler inyectando las dependencias necesarias
 export const inboundHandler = createInboundHandler({
 	now: () => new Date(),

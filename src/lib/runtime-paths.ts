@@ -21,6 +21,8 @@ export const runtimePaths = {
 
 export const destructiveRestartFlagName = ".reset-auth";
 export const softRestartFlagName = ".restart-bot";
+const groupListRequestFlagName = ".list-groups-request";
+const groupListResultFileName = ".list-groups-result.json";
 
 export function getDestructiveRestartFlagPath(): string {
 	return path.join(runtimePaths.dataDir, destructiveRestartFlagName);
@@ -28,6 +30,21 @@ export function getDestructiveRestartFlagPath(): string {
 
 export function getSoftRestartFlagPath(): string {
 	return path.join(runtimePaths.dataDir, softRestartFlagName);
+}
+
+// Bandera de diagnóstico puntual: el proceso web la crea para pedirle al bot-process (único
+// dueño del socket vivo) el listado de grupos donde participa, y lee el resultado del archivo
+// de abajo — mismo patrón que .restart-bot/.reset-auth, evita abrir un segundo socket de Baileys.
+export function getGroupListRequestFlagPath(): string {
+	return path.join(runtimePaths.dataDir, groupListRequestFlagName);
+}
+
+export function getGroupListResultPath(): string {
+	return path.join(runtimePaths.dataDir, groupListResultFileName);
+}
+
+export function getPendingAnnouncementsDir(): string {
+	return path.join(runtimePaths.dataDir, "pending-announcements");
 }
 
 export function getInstanceAuthDir(instanceId: number | string): string {
