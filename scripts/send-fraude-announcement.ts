@@ -6,7 +6,12 @@
 //   npx tsx scripts/send-fraude-announcement.ts "Texto del comunicado..."
 //   npx tsx scripts/send-fraude-announcement.ts --file ruta/al/mensaje.txt
 //   npx tsx scripts/send-fraude-announcement.ts "texto" --attach ruta/archivo.zip
+//   npx tsx scripts/send-fraude-announcement.ts "texto" --from-settings "Forense Courier"
 //   npx tsx scripts/send-fraude-announcement.ts "texto" --at "14:00"   (hora Uruguay, hoy)
+//
+// --from-settings toma el archivo por su nombre desde Ajustes → "Archivos para el Grupo Fraude -
+// Información" (siempre la última versión subida ahí), en vez de --attach a una ruta local que
+// puede quedar desactualizada.
 //
 // Por dentro pega contra /api/groups/announce, que deja el mensaje en una cola de archivos que
 // el bot-process recoge en su loop de 1s y envía con el socket de WhatsApp ya conectado (nunca
@@ -48,6 +53,7 @@ function nextUruguayOccurrence(hhmm: string): string {
 function parseArgs() {
 	const args = process.argv.slice(2);
 	let attachPath: string | undefined;
+	let fromSettings: string | undefined;
 	let at: string | undefined;
 	let filePath: string | undefined;
 	const rest: string[] = [];
@@ -55,6 +61,8 @@ function parseArgs() {
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] === "--attach") {
 			attachPath = args[++i];
+		} else if (args[i] === "--from-settings") {
+			fromSettings = args[++i];
 		} else if (args[i] === "--at") {
 			at = args[++i];
 		} else if (args[i] === "--file") {
@@ -67,11 +75,35 @@ function parseArgs() {
 	const text = filePath ? fs.readFileSync(filePath, "utf-8").trim() : rest.join(" ").trim();
 	if (!text) {
 		throw new Error(
-			'Falta el texto del comunicado. Uso: npx tsx scripts/send-fraude-announcement.ts "texto..." [--file ruta.txt] [--attach ruta] [--at "HH:mm"]',
+			'Falta el texto del comunicado. Uso: npx tsx scripts/send-fraude-announcement.ts "texto..." [--file ruta.txt] [--attach ruta | --from-settings "nombre"] [--at "HH:mm"]',
 		);
 	}
 
-	return { text, attachPath, at };
+	return { text, attachPath, fromSettings, at };
+}
+
+async function resolveAttachment(attachPath?: string, fromSettings?: string) {
+	if (fromSettings) {
+		const settings = await callWOpenApi<Record<string, any>>("/api/settings");
+		const list: Array<{ label: string; fileName: string; mimetype: string; base64: string }> =
+			settings.fraude_attachments || [];
+		const match = list.find((a) => a.label?.trim().toLowerCase() === fromSettings.trim().toLowerCase());
+		if (!match) {
+			const available = list.map((a) => a.label).filter(Boolean).join(", ") || "(ninguno)";
+			throw new Error(
+				`No se encontró "${fromSettings}" en Ajustes → Archivos para el grupo Fraude. Disponibles: ${available}`,
+			);
+		}
+		return { fileName: match.fileName, mimetype: match.mimetype, base64: match.base64 };
+	}
+	if (attachPath) {
+		return {
+			fileName: path.basename(attachPath),
+			mimetype: mimetypeFor(attachPath),
+			base64: fs.readFileSync(attachPath).toString("base64"),
+		};
+	}
+	return undefined;
 }
 
 async function main() {
@@ -80,15 +112,9 @@ async function main() {
 			"Falta FRAUDE_GROUP_JID en el .env local (el gid del grupo 'Fraude - información').",
 		);
 	}
-	const { text, attachPath, at } = parseArgs();
+	const { text, attachPath, fromSettings, at } = parseArgs();
 
-	const attachment = attachPath
-		? {
-				fileName: path.basename(attachPath),
-				mimetype: mimetypeFor(attachPath),
-				base64: fs.readFileSync(attachPath).toString("base64"),
-			}
-		: undefined;
+	const attachment = await resolveAttachment(attachPath, fromSettings);
 
 	const sendAfter = at ? nextUruguayOccurrence(at) : undefined;
 

@@ -255,6 +255,117 @@ function AgentProfilesSection() {
 	);
 }
 
+interface FraudeAttachment {
+	id: string;
+	label: string;
+	fileName: string;
+	mimetype: string;
+	base64: string;
+	updatedAt: string;
+}
+
+function FraudeAttachmentsSection({
+	settings,
+	onChange,
+}: {
+	settings: Record<string, any>;
+	onChange: (key: string, value: any) => void;
+}) {
+	const attachments: FraudeAttachment[] = settings.fraude_attachments || [];
+
+	const updateAttachments = (next: FraudeAttachment[]) => onChange("fraude_attachments", next);
+
+	const addAttachment = () => {
+		updateAttachments([
+			...attachments,
+			{ id: crypto.randomUUID(), label: "", fileName: "", mimetype: "", base64: "", updatedAt: new Date().toISOString() },
+		]);
+	};
+
+	const updateAttachment = (id: string, patch: Partial<FraudeAttachment>) =>
+		updateAttachments(attachments.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+
+	const removeAttachment = (id: string) => updateAttachments(attachments.filter((a) => a.id !== id));
+
+	const handleFile = (id: string, file: File) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const result = reader.result as string;
+			const base64 = result.split(",")[1] || "";
+			updateAttachment(id, {
+				fileName: file.name,
+				mimetype: file.type || "application/zip",
+				base64,
+				updatedAt: new Date().toISOString(),
+			});
+		};
+		reader.readAsDataURL(file);
+	};
+
+	return (
+		<div className="bg-surface/80 border border-outline-variant/20 p-5 rounded-2xl space-y-4">
+			<div className="flex items-center justify-between">
+				<h3 className="text-xs font-bold text-on-surface uppercase tracking-wider flex items-center gap-2">
+					<span>📎</span> Archivos para el Grupo Fraude - Información
+				</h3>
+				<button
+					type="button"
+					onClick={addAttachment}
+					className="text-[9px] font-bold uppercase tracking-wider text-primary hover:underline"
+				>
+					+ Agregar archivo
+				</button>
+			</div>
+			<p className="text-[9px] text-on-surface-variant/80">
+				Subí acá la versión vigente de cada .zip que se manda al grupo &quot;Fraude - Información&quot;. Ponele un nombre corto a cada uno (ej. &quot;Forense Courier&quot;) para pedir ese envío por ese nombre — así siempre se manda el archivo actualizado y no uno viejo.
+			</p>
+			{attachments.length === 0 ? (
+				<p className="text-[10px] text-on-surface-variant/60 italic">Sin archivos cargados todavía.</p>
+			) : (
+				<div className="space-y-3">
+					{attachments.map((att) => (
+						<div key={att.id} className="rounded-xl border border-outline-variant/20 bg-surface-container-low/50 p-3 space-y-2">
+							<div className="flex items-center gap-3">
+								<input
+									type="text"
+									value={att.label}
+									onChange={(e) => updateAttachment(att.id, { label: e.target.value })}
+									placeholder="Nombre para identificarlo (ej. Forense Courier)"
+									className="flex-1 px-3 py-1.5 bg-surface border border-outline-variant/30 rounded-lg text-xs text-on-surface focus:outline-none focus:border-primary"
+								/>
+								<button
+									type="button"
+									onClick={() => removeAttachment(att.id)}
+									className="shrink-0 rounded-lg border border-error/40 bg-error/10 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wider text-error hover:bg-error/20"
+								>
+									Quitar
+								</button>
+							</div>
+							<div className="flex items-center gap-3 flex-wrap">
+								<input
+									type="file"
+									accept=".zip,application/zip,application/x-zip-compressed,.pdf,application/pdf"
+									onChange={(e) => {
+										const file = e.target.files?.[0];
+										if (file) handleFile(att.id, file);
+										e.target.value = "";
+									}}
+									className="text-[10px] text-on-surface-variant file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-primary/10 file:text-primary file:text-[10px] file:font-bold file:uppercase file:tracking-wider file:cursor-pointer hover:file:bg-primary/20"
+								/>
+								{att.fileName && (
+									<span className="text-[10px] text-on-surface-variant font-mono truncate">
+										{att.fileName} · {Math.max(1, Math.round((att.base64.length * 0.75) / 1024))} KB
+									</span>
+								)}
+							</div>
+						</div>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
 export default function SettingsPanel() {
 	const [settings, setSettings] = useState<Record<string, any>>({});
 	const [loading, setLoading] = useState(false);
@@ -799,6 +910,9 @@ export default function SettingsPanel() {
 						</p>
 					</div>
 				</div>
+
+				{/* Grupo: Archivos para el Grupo Fraude - Información */}
+				<FraudeAttachmentsSection settings={settings} onChange={handleChange} />
 
 				{/* Grupo: Perfiles de Agentes */}
 				<AgentProfilesSection />
