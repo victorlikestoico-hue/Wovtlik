@@ -134,9 +134,36 @@ async function main() {
 			for (const file of fs.readdirSync(pendingAnnouncementsDir)) {
 				if (!file.endsWith(".json")) continue;
 				const filePath = path.join(pendingAnnouncementsDir, file);
+				let parsed: any;
 				try {
-					const { jid, text } = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-					await sendViaGlobalSock(jid, { text }, { kind: "cron" });
+					parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+				} catch (error) {
+					console.error(`[bot-process] Anuncio manual (${file}) con JSON inválido, se descarta:`, error);
+					try {
+						fs.unlinkSync(filePath);
+					} catch {
+						// noop
+					}
+					continue;
+				}
+
+				// Anuncio programado para más adelante: se deja el archivo y se reintenta en el
+				// próximo tick (cada 1s) hasta que llegue su hora.
+				if (parsed.sendAfter && Date.now() < new Date(parsed.sendAfter).getTime()) {
+					continue;
+				}
+
+				try {
+					const { jid, text, attachment } = parsed;
+					const content = attachment
+						? {
+								document: Buffer.from(attachment.base64, "base64"),
+								fileName: attachment.fileName,
+								mimetype: attachment.mimetype,
+								caption: text,
+							}
+						: { text };
+					await sendViaGlobalSock(jid, content, { kind: "cron" });
 					console.log(`[bot-process] Anuncio manual enviado a ${jid}.`);
 				} catch (error) {
 					console.error(`[bot-process] Error enviando anuncio manual (${file}):`, error);

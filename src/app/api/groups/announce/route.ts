@@ -13,12 +13,27 @@ export async function POST(req: Request) {
 		const body = await req.json().catch(() => ({}));
 		const jid = typeof body.jid === "string" ? body.jid.trim() : "";
 		const text = typeof body.text === "string" ? body.text.trim() : "";
+		const sendAfter = typeof body.sendAfter === "string" ? body.sendAfter : undefined;
+		const attachment =
+			body.attachment &&
+			typeof body.attachment.base64 === "string" &&
+			typeof body.attachment.fileName === "string" &&
+			typeof body.attachment.mimetype === "string"
+				? {
+						base64: body.attachment.base64,
+						fileName: body.attachment.fileName,
+						mimetype: body.attachment.mimetype,
+					}
+				: undefined;
 
 		if (!jid.endsWith("@g.us")) {
 			return NextResponse.json({ error: "jid debe ser un grupo (@g.us)" }, { status: 400 });
 		}
 		if (!text) {
 			return NextResponse.json({ error: "text es requerido" }, { status: 400 });
+		}
+		if (sendAfter && Number.isNaN(new Date(sendAfter).getTime())) {
+			return NextResponse.json({ error: "sendAfter debe ser una fecha ISO válida" }, { status: 400 });
 		}
 
 		const dir = getPendingAnnouncementsDir();
@@ -27,7 +42,7 @@ export async function POST(req: Request) {
 		}
 
 		const filePath = path.join(dir, `${Date.now()}-${crypto.randomUUID()}.json`);
-		fs.writeFileSync(filePath, JSON.stringify({ jid, text }));
+		fs.writeFileSync(filePath, JSON.stringify({ jid, text, sendAfter, attachment }));
 
 		return NextResponse.json({ ok: true });
 	} catch (error: any) {
