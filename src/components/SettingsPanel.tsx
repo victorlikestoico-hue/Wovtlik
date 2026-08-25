@@ -287,6 +287,16 @@ function FraudeAttachmentsSection({
 
 	const removeAttachment = (id: string) => updateAttachments(attachments.filter((a) => a.id !== id));
 
+	const fallbackMimetype = (fileName: string): string => {
+		const ext = fileName.toLowerCase().split(".").pop();
+		const map: Record<string, string> = {
+			zip: "application/zip",
+			rar: "application/vnd.rar",
+			pdf: "application/pdf",
+		};
+		return (ext && map[ext]) || "application/octet-stream";
+	};
+
 	const handleFile = (id: string, file: File) => {
 		const reader = new FileReader();
 		reader.onload = () => {
@@ -294,7 +304,7 @@ function FraudeAttachmentsSection({
 			const base64 = result.split(",")[1] || "";
 			updateAttachment(id, {
 				fileName: file.name,
-				mimetype: file.type || "application/zip",
+				mimetype: file.type || fallbackMimetype(file.name),
 				base64,
 				updatedAt: new Date().toISOString(),
 			});
@@ -317,7 +327,7 @@ function FraudeAttachmentsSection({
 				</button>
 			</div>
 			<p className="text-[9px] text-on-surface-variant/80">
-				Subí acá la versión vigente de cada .zip que se manda al grupo &quot;Fraude - Información&quot;. Ponele un nombre corto a cada uno (ej. &quot;Forense Courier&quot;) para pedir ese envío por ese nombre — así siempre se manda el archivo actualizado y no uno viejo.
+				Subí acá la versión vigente de cada .zip/.rar que se manda al grupo &quot;Fraude - Información&quot;. Ponele un nombre corto a cada uno (ej. &quot;Forense Courier&quot;) para pedir ese envío por ese nombre — así siempre se manda el archivo actualizado y no uno viejo.
 			</p>
 			{attachments.length === 0 ? (
 				<p className="text-[10px] text-on-surface-variant/60 italic">Sin archivos cargados todavía.</p>
@@ -344,7 +354,7 @@ function FraudeAttachmentsSection({
 							<div className="flex items-center gap-3 flex-wrap">
 								<input
 									type="file"
-									accept=".zip,application/zip,application/x-zip-compressed,.pdf,application/pdf"
+									accept=".zip,application/zip,application/x-zip-compressed,.rar,application/vnd.rar,application/x-rar-compressed,.pdf,application/pdf"
 									onChange={(e) => {
 										const file = e.target.files?.[0];
 										if (file) handleFile(att.id, file);

@@ -28,6 +28,7 @@ function mimetypeFor(filePath: string): string {
 	const ext = path.extname(filePath).toLowerCase();
 	const map: Record<string, string> = {
 		".zip": "application/zip",
+		".rar": "application/vnd.rar",
 		".pdf": "application/pdf",
 		".png": "image/png",
 		".jpg": "image/jpeg",
