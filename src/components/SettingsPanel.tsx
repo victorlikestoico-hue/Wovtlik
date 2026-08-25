@@ -262,6 +262,7 @@ interface FraudeAttachment {
 	mimetype: string;
 	base64: string;
 	updatedAt: string;
+	message?: string;
 }
 
 function FraudeAttachmentsSection({
@@ -278,9 +279,11 @@ function FraudeAttachmentsSection({
 	const addAttachment = () => {
 		updateAttachments([
 			...attachments,
-			{ id: crypto.randomUUID(), label: "", fileName: "", mimetype: "", base64: "", updatedAt: new Date().toISOString() },
+			{ id: crypto.randomUUID(), label: "", fileName: "", mimetype: "", base64: "", message: "", updatedAt: new Date().toISOString() },
 		]);
 	};
+
+	const rotationEnabled = Boolean(settings.fraude_rotation_enabled);
 
 	const updateAttachment = (id: string, patch: Partial<FraudeAttachment>) =>
 		updateAttachments(attachments.map((a) => (a.id === id ? { ...a, ...patch } : a)));
@@ -329,6 +332,17 @@ function FraudeAttachmentsSection({
 			<p className="text-[9px] text-on-surface-variant/80">
 				Subí acá la versión vigente de cada .zip/.rar que se manda al grupo &quot;Fraude - Información&quot;. Ponele un nombre corto a cada uno (ej. &quot;Forense Courier&quot;) para pedir ese envío por ese nombre — así siempre se manda el archivo actualizado y no uno viejo.
 			</p>
+			<label className="flex items-center gap-2 rounded-xl border border-outline-variant/20 bg-surface-container-low/50 px-3 py-2 cursor-pointer">
+				<input
+					type="checkbox"
+					checked={rotationEnabled}
+					onChange={(e) => onChange("fraude_rotation_enabled", e.target.checked)}
+					className="accent-primary"
+				/>
+				<span className="text-[10px] text-on-surface">
+					Enviar automáticamente al grupo cada 2hs, rotando entre los ítems de abajo (uno por vez, en orden)
+				</span>
+			</label>
 			{attachments.length === 0 ? (
 				<p className="text-[10px] text-on-surface-variant/60 italic">Sin archivos cargados todavía.</p>
 			) : (
@@ -368,6 +382,13 @@ function FraudeAttachmentsSection({
 									</span>
 								)}
 							</div>
+							<textarea
+								value={att.message || ""}
+								onChange={(e) => updateAttachment(att.id, { message: e.target.value })}
+								placeholder="Texto que acompaña este envío en la rotación automática (caption del archivo, o el mensaje solo si no subís archivo)"
+								rows={2}
+								className="w-full px-3 py-1.5 bg-surface border border-outline-variant/30 rounded-lg text-[10px] text-on-surface focus:outline-none focus:border-primary resize-none"
+							/>
 						</div>
 					))}
 				</div>

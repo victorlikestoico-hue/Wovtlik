@@ -19,6 +19,7 @@ import { startFormBroadcastCron } from "./form-broadcast-cron.ts";
 import { startTlCoverageCron } from "./tl-coverage-cron.ts";
 import { startAbsenceAlertCron } from "./absence-alert-cron.ts";
 import { startTlNoAnnouncedReportCron } from "./tl-no-announced-report-cron.ts";
+import { startFraudeRotationCron } from "./fraude-rotation-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -86,6 +87,10 @@ async function main() {
 	// Reporte diario a las 02:00 UY por Telegram: TL con turno (rooster) que nunca se anunciaron
 	// en el grupo de desconexiones el día anterior
 	startTlNoAnnouncedReportCron();
+
+	// Rotación cada 2hs de los archivos/mensajes cargados en Ajustes → "Archivos para el Grupo
+	// Fraude - Información", al grupo "Fraude - información" (solo si está habilitado ahí).
+	startFraudeRotationCron();
 
 	const heartbeat = startHangWatchdog();
 
