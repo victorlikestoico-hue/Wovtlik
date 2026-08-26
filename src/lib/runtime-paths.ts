@@ -43,10 +43,6 @@ export function getGroupListResultPath(): string {
 	return path.join(runtimePaths.dataDir, groupListResultFileName);
 }
 
-export function getPendingAnnouncementsDir(): string {
-	return path.join(runtimePaths.dataDir, "pending-announcements");
-}
-
 export function getInstanceAuthDir(instanceId: number | string): string {
 	return path.join(runtimePaths.authDir, "instances", String(instanceId));
 }

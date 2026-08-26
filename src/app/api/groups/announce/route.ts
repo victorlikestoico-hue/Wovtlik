@@ -1,13 +1,9 @@
 import { NextResponse } from "next/server";
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { getPendingAnnouncementsDir } from "../../../../lib/runtime-paths.ts";
+import { enqueueGroupAnnouncement } from "../../../../lib/db.ts";
 
-// Encola un mensaje para un grupo de WhatsApp dejando un archivo en pending-announcements/,
-// que el bot-process (único dueño del socket vivo) recoge en su loop de 1s y envía vía
-// sendViaGlobalSock — mismo patrón de bandera de archivo que /api/connection/disconnect,
-// evita abrir un segundo socket de Baileys para este envío puntual.
+// Encola un mensaje para un grupo de WhatsApp en la tabla group_announcements (Postgres, persiste
+// entre redeploys — ver comentario junto a esa tabla en src/lib/db.ts), que el bot-process (único
+// dueño del socket vivo) recoge en su loop de 1s y envía vía sendViaGlobalSock.
 export async function POST(req: Request) {
 	try {
 		const body = await req.json().catch(() => ({}));
@@ -36,13 +32,7 @@ export async function POST(req: Request) {
 			return NextResponse.json({ error: "sendAfter debe ser una fecha ISO válida" }, { status: 400 });
 		}
 
-		const dir = getPendingAnnouncementsDir();
-		if (!fs.existsSync(dir)) {
-			fs.mkdirSync(dir, { recursive: true });
-		}
-
-		const filePath = path.join(dir, `${Date.now()}-${crypto.randomUUID()}.json`);
-		fs.writeFileSync(filePath, JSON.stringify({ jid, text, sendAfter, attachment }));
+		await enqueueGroupAnnouncement({ jid, text, sendAfter, attachment });
 
 		return NextResponse.json({ ok: true });
 	} catch (error: any) {

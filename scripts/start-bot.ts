@@ -1,7 +1,6 @@
 // scripts/env-loader.ts DEBE ser el primer import para popular process.env antes de que otros módulos lo lean
 import "./env-loader.ts";
 import fs from "node:fs";
-import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { startWASocket, shutdownWASocket, listAllGroups, sendViaGlobalSock } from "../src/lib/baileys/client.ts";
 import {
@@ -9,8 +8,12 @@ import {
 	getSoftRestartFlagPath,
 	getGroupListRequestFlagPath,
 	getGroupListResultPath,
-	getPendingAnnouncementsDir,
 } from "../src/lib/runtime-paths.ts";
+import {
+	claimNextDueGroupAnnouncement,
+	markGroupAnnouncementSent,
+	markGroupAnnouncementError,
+} from "../src/lib/db.ts";
 import { startDashBigReportsCron } from "./dashbig-reports-cron.ts";
 import { startAppointmentsCron } from "./appointments-cron.ts";
 import { startFallasTemplateCron } from "./fallas-template-cron.ts";
@@ -134,64 +137,28 @@ async function main() {
 			}
 		}
 
-		const pendingAnnouncementsDir = getPendingAnnouncementsDir();
-		if (fs.existsSync(pendingAnnouncementsDir)) {
-			for (const file of fs.readdirSync(pendingAnnouncementsDir)) {
-				if (!file.endsWith(".json")) continue;
-				const filePath = path.join(pendingAnnouncementsDir, file);
-				let parsed: any;
-				try {
-					parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-				} catch (error) {
-					console.error(`[bot-process] Anuncio manual (${file}) con JSON inválido, se descarta:`, error);
-					try {
-						fs.unlinkSync(filePath);
-					} catch {
-						// noop
-					}
-					continue;
-				}
+		// Anuncios puntuales/programados a grupos (cola en Postgres, ver comentario junto a
+		// group_announcements en src/lib/db.ts — antes era un archivo en /app/data, que un
+		// redeploy podía borrar antes de que le llegara la hora de enviarse).
+		while (true) {
+			const item = await claimNextDueGroupAnnouncement();
+			if (!item) break;
 
-				// Anuncio programado para más adelante: se deja el archivo y se reintenta en el
-				// próximo tick (cada 1s) hasta que llegue su hora.
-				if (parsed.sendAfter && Date.now() < new Date(parsed.sendAfter).getTime()) {
-					continue;
-				}
-
-				// Reclamamos el archivo ANTES de encolar el envío (rename síncrono, no async):
-				// sendViaGlobalSock puede tardar más de los 1000ms del tick porque pasa por la
-				// cola paceada (send-queue/warmup-throttle) y el setInterval no espera a que
-				// termine el tick anterior. Si borráramos recién en el finally, un tick
-				// posterior podía volver a leer este mismo .json todavía presente y reenviar el
-				// mismo anuncio (incidente 2026-08-25: mismo anuncio al grupo Fraude x3).
-				const claimedPath = `${filePath}.processing`;
-				try {
-					fs.renameSync(filePath, claimedPath);
-				} catch {
-					continue; // otro tick ya se lo llevó
-				}
-
-				try {
-					const { jid, text, attachment } = parsed;
-					const content = attachment
-						? {
-								document: Buffer.from(attachment.base64, "base64"),
-								fileName: attachment.fileName,
-								mimetype: attachment.mimetype,
-								caption: text,
-							}
-						: { text };
-					await sendViaGlobalSock(jid, content, { kind: "cron" });
-					console.log(`[bot-process] Anuncio manual enviado a ${jid}.`);
-				} catch (error) {
-					console.error(`[bot-process] Error enviando anuncio manual (${file}):`, error);
-				} finally {
-					try {
-						fs.unlinkSync(claimedPath);
-					} catch {
-						// noop
-					}
-				}
+			try {
+				const content = item.attachment
+					? {
+							document: Buffer.from(item.attachment.base64, "base64"),
+							fileName: item.attachment.fileName,
+							mimetype: item.attachment.mimetype,
+							caption: item.text,
+						}
+					: { text: item.text };
+				await sendViaGlobalSock(item.jid, content, { kind: "cron" });
+				await markGroupAnnouncementSent(item.id);
+				console.log(`[bot-process] Anuncio manual enviado a ${item.jid} (id ${item.id}).`);
+			} catch (error: any) {
+				console.error(`[bot-process] Error enviando anuncio manual (id ${item.id}):`, error);
+				await markGroupAnnouncementError(item.id, error?.message || String(error));
 			}
 		}
 

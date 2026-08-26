@@ -1655,3 +1655,81 @@ export async function listMetaReplies(
 	return res.rows;
 }
 
+// ─── Anuncios puntuales/programados a grupos de WhatsApp ─────────────────────
+// Antes esta cola vivía como archivos sueltos en /app/data/pending-announcements, que NO es un
+// volumen persistente de Railway: cualquier redeploy entre el encolado y el envío programado
+// borraba el mensaje sin dejar rastro (incidente 2026-08-25). Ahora vive en Postgres, que sí
+// persiste, así un anuncio con --at sobrevive redeploys hasta que le llegue la hora.
+
+export interface GroupAnnouncementRow {
+	id: number;
+	jid: string;
+	text: string;
+	send_after: Date | null;
+	attachment: { fileName: string; mimetype: string; base64: string } | null;
+	status: "pending" | "processing" | "sent" | "error";
+	error: string | null;
+	created_at: Date;
+	sent_at: Date | null;
+}
+
+export async function enqueueGroupAnnouncement(input: {
+	jid: string;
+	text: string;
+	sendAfter?: string | null;
+	attachment?: { fileName: string; mimetype: string; base64: string } | null;
+}): Promise<GroupAnnouncementRow> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<GroupAnnouncementRow>(
+		`INSERT INTO group_announcements (jid, text, send_after, attachment)
+		 VALUES ($1, $2, $3, $4::jsonb)
+		 RETURNING *`,
+		[
+			input.jid,
+			input.text,
+			input.sendAfter ?? null,
+			input.attachment ? JSON.stringify(input.attachment) : null,
+		],
+	);
+	return res.rows[0];
+}
+
+/**
+ * Reclama atómicamente el próximo anuncio pendiente cuya hora ya llegó (o que no tenía hora
+ * programada). `FOR UPDATE SKIP LOCKED` evita que dos ticks concurrentes del bot-process (o un
+ * redeploy solapado con el proceso viejo todavía terminando) agarren el mismo anuncio dos veces
+ * — mismo problema que causó el reenvío triplicado cuando esto era un archivo con rename síncrono.
+ */
+export async function claimNextDueGroupAnnouncement(): Promise<GroupAnnouncementRow | null> {
+	await ensureSchemaInitialized();
+	const res = await pool.query<GroupAnnouncementRow>(
+		`UPDATE group_announcements
+		 SET status = 'processing'
+		 WHERE id = (
+		   SELECT id FROM group_announcements
+		   WHERE status = 'pending' AND (send_after IS NULL OR send_after <= NOW())
+		   ORDER BY created_at
+		   LIMIT 1
+		   FOR UPDATE SKIP LOCKED
+		 )
+		 RETURNING *`,
+	);
+	return res.rows[0] ?? null;
+}
+
+export async function markGroupAnnouncementSent(id: number): Promise<void> {
+	await pool.query(
+		`UPDATE group_announcements SET status = 'sent', sent_at = NOW() WHERE id = $1`,
+		[id],
+	);
+}
+
+/** No se reintenta solo: si falló (ej. socket caído justo en ese instante), queda visible con el
+ * error para diagnosticar en vez de perderse en silencio como pasaba con los archivos. */
+export async function markGroupAnnouncementError(id: number, error: string): Promise<void> {
+	await pool.query(
+		`UPDATE group_announcements SET status = 'error', error = $2 WHERE id = $1`,
+		[id, error],
+	);
+}
+

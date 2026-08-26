@@ -96,7 +96,21 @@ CREATE TABLE IF NOT EXISTS meta_replies (
   received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_meta_replies_received_at ON meta_replies(received_at DESC);
-CREATE INDEX IF NOT EXISTS idx_meta_replies_phone ON meta_replies(phone);`;
+CREATE INDEX IF NOT EXISTS idx_meta_replies_phone ON meta_replies(phone);
+CREATE TABLE IF NOT EXISTS group_announcements (
+  id SERIAL PRIMARY KEY,
+  jid TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
+  send_after TIMESTAMP WITH TIME ZONE,
+  attachment JSONB,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','sent','error')),
+  error TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  sent_at TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX IF NOT EXISTS idx_group_announcements_due
+  ON group_announcements(send_after)
+  WHERE status = 'pending';`;
 
 export async function initializePostgresSchema(pool: PostgresPool) {
 	if (!pool.connect) {
