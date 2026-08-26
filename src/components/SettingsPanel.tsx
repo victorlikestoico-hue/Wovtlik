@@ -273,14 +273,21 @@ function FraudeAttachmentsSection({
 	onChange: (key: string, value: any) => void;
 }) {
 	const attachments: FraudeAttachment[] = settings.fraude_attachments || [];
+	// Ítems sin archivo (mensaje solo) muestran el picker de archivo recién si el usuario lo pide,
+	// para no confundirlos con un ítem de archivo a medio cargar.
+	const [expandedFileIds, setExpandedFileIds] = useState<Set<string>>(new Set());
 
 	const updateAttachments = (next: FraudeAttachment[]) => onChange("fraude_attachments", next);
 
-	const addAttachment = () => {
+	const addItem = (expandFile: boolean) => {
+		const id = crypto.randomUUID();
 		updateAttachments([
 			...attachments,
-			{ id: crypto.randomUUID(), label: "", fileName: "", mimetype: "", base64: "", message: "", updatedAt: new Date().toISOString() },
+			{ id, label: "", fileName: "", mimetype: "", base64: "", message: "", updatedAt: new Date().toISOString() },
 		]);
+		if (expandFile) {
+			setExpandedFileIds((prev) => new Set(prev).add(id));
+		}
 	};
 
 	const rotationEnabled = Boolean(settings.fraude_rotation_enabled);
@@ -289,6 +296,17 @@ function FraudeAttachmentsSection({
 		updateAttachments(attachments.map((a) => (a.id === id ? { ...a, ...patch } : a)));
 
 	const removeAttachment = (id: string) => updateAttachments(attachments.filter((a) => a.id !== id));
+
+	const clearFile = (id: string) =>
+		updateAttachment(id, { fileName: "", mimetype: "", base64: "" });
+
+	const toggleExpandFile = (id: string) =>
+		setExpandedFileIds((prev) => {
+			const next = new Set(prev);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
 
 	const fallbackMimetype = (fileName: string): string => {
 		const ext = fileName.toLowerCase().split(".").pop();
@@ -317,20 +335,29 @@ function FraudeAttachmentsSection({
 
 	return (
 		<div className="bg-surface/80 border border-outline-variant/20 p-5 rounded-2xl space-y-4">
-			<div className="flex items-center justify-between">
+			<div className="flex items-center justify-between flex-wrap gap-2">
 				<h3 className="text-xs font-bold text-on-surface uppercase tracking-wider flex items-center gap-2">
-					<span>📎</span> Archivos para el Grupo Fraude - Información
+					<span>📎💬</span> Envíos rotativos al Grupo Fraude - Información
 				</h3>
-				<button
-					type="button"
-					onClick={addAttachment}
-					className="text-[9px] font-bold uppercase tracking-wider text-primary hover:underline"
-				>
-					+ Agregar archivo
-				</button>
+				<div className="flex items-center gap-3">
+					<button
+						type="button"
+						onClick={() => addItem(false)}
+						className="text-[9px] font-bold uppercase tracking-wider text-primary hover:underline"
+					>
+						+ Agregar mensaje
+					</button>
+					<button
+						type="button"
+						onClick={() => addItem(true)}
+						className="text-[9px] font-bold uppercase tracking-wider text-primary hover:underline"
+					>
+						+ Agregar archivo
+					</button>
+				</div>
 			</div>
 			<p className="text-[9px] text-on-surface-variant/80">
-				Subí acá la versión vigente de cada .zip/.rar que se manda al grupo &quot;Fraude - Información&quot;. Ponele un nombre corto a cada uno (ej. &quot;Forense Courier&quot;) para pedir ese envío por ese nombre — así siempre se manda el archivo actualizado y no uno viejo.
+				Cada ítem de la lista es un envío de la rotación automática: puede ser solo texto, solo un archivo, o un archivo con su mensaje (caption). Ponele un nombre corto a cada uno (ej. &quot;Forense Courier&quot;) para poder pedirlo también por chat con ese nombre.
 			</p>
 			<label className="flex items-center gap-2 rounded-xl border border-outline-variant/20 bg-surface-container-low/50 px-3 py-2 cursor-pointer">
 				<input
@@ -344,53 +371,84 @@ function FraudeAttachmentsSection({
 				</span>
 			</label>
 			{attachments.length === 0 ? (
-				<p className="text-[10px] text-on-surface-variant/60 italic">Sin archivos cargados todavía.</p>
+				<p className="text-[10px] text-on-surface-variant/60 italic">Sin ítems cargados todavía.</p>
 			) : (
 				<div className="space-y-3">
-					{attachments.map((att) => (
-						<div key={att.id} className="rounded-xl border border-outline-variant/20 bg-surface-container-low/50 p-3 space-y-2">
-							<div className="flex items-center gap-3">
-								<input
-									type="text"
-									value={att.label}
-									onChange={(e) => updateAttachment(att.id, { label: e.target.value })}
-									placeholder="Nombre para identificarlo (ej. Forense Courier)"
-									className="flex-1 px-3 py-1.5 bg-surface border border-outline-variant/30 rounded-lg text-xs text-on-surface focus:outline-none focus:border-primary"
+					{attachments.map((att) => {
+						const hasFile = Boolean(att.fileName);
+						const showFilePicker = hasFile || expandedFileIds.has(att.id);
+						return (
+							<div key={att.id} className="rounded-xl border border-outline-variant/20 bg-surface-container-low/50 p-3 space-y-2">
+								<div className="flex items-center gap-3">
+									<input
+										type="text"
+										value={att.label}
+										onChange={(e) => updateAttachment(att.id, { label: e.target.value })}
+										placeholder="Nombre para identificarlo (ej. Forense Courier)"
+										className="flex-1 px-3 py-1.5 bg-surface border border-outline-variant/30 rounded-lg text-xs text-on-surface focus:outline-none focus:border-primary"
+									/>
+									<button
+										type="button"
+										onClick={() => removeAttachment(att.id)}
+										className="shrink-0 rounded-lg border border-error/40 bg-error/10 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wider text-error hover:bg-error/20"
+									>
+										Quitar
+									</button>
+								</div>
+								<textarea
+									value={att.message || ""}
+									onChange={(e) => updateAttachment(att.id, { message: e.target.value })}
+									placeholder={hasFile ? "Mensaje que acompaña al archivo (caption)" : "Mensaje a enviar (texto solo, sin archivo)"}
+									rows={2}
+									className="w-full px-3 py-1.5 bg-surface border border-outline-variant/30 rounded-lg text-[10px] text-on-surface focus:outline-none focus:border-primary resize-none"
 								/>
-								<button
-									type="button"
-									onClick={() => removeAttachment(att.id)}
-									className="shrink-0 rounded-lg border border-error/40 bg-error/10 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wider text-error hover:bg-error/20"
-								>
-									Quitar
-								</button>
-							</div>
-							<div className="flex items-center gap-3 flex-wrap">
-								<input
-									type="file"
-									accept=".zip,application/zip,application/x-zip-compressed,.rar,application/vnd.rar,application/x-rar-compressed,.pdf,application/pdf"
-									onChange={(e) => {
-										const file = e.target.files?.[0];
-										if (file) handleFile(att.id, file);
-										e.target.value = "";
-									}}
-									className="text-[10px] text-on-surface-variant file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-primary/10 file:text-primary file:text-[10px] file:font-bold file:uppercase file:tracking-wider file:cursor-pointer hover:file:bg-primary/20"
-								/>
-								{att.fileName && (
-									<span className="text-[10px] text-on-surface-variant font-mono truncate">
-										{att.fileName} · {Math.max(1, Math.round((att.base64.length * 0.75) / 1024))} KB
-									</span>
+								{showFilePicker ? (
+									<div className="flex items-center gap-3 flex-wrap">
+										<input
+											type="file"
+											accept=".zip,application/zip,application/x-zip-compressed,.rar,application/vnd.rar,application/x-rar-compressed,.pdf,application/pdf"
+											onChange={(e) => {
+												const file = e.target.files?.[0];
+												if (file) handleFile(att.id, file);
+												e.target.value = "";
+											}}
+											className="text-[10px] text-on-surface-variant file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-primary/10 file:text-primary file:text-[10px] file:font-bold file:uppercase file:tracking-wider file:cursor-pointer hover:file:bg-primary/20"
+										/>
+										{hasFile ? (
+											<>
+												<span className="text-[10px] text-on-surface-variant font-mono truncate">
+													{att.fileName} · {Math.max(1, Math.round((att.base64.length * 0.75) / 1024))} KB
+												</span>
+												<button
+													type="button"
+													onClick={() => clearFile(att.id)}
+													className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant hover:text-error hover:underline"
+												>
+													Quitar archivo
+												</button>
+											</>
+										) : (
+											<button
+												type="button"
+												onClick={() => toggleExpandFile(att.id)}
+												className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant hover:underline"
+											>
+												Cancelar
+											</button>
+										)}
+									</div>
+								) : (
+									<button
+										type="button"
+										onClick={() => toggleExpandFile(att.id)}
+										className="text-[9px] font-bold uppercase tracking-wider text-primary hover:underline"
+									>
+										+ Adjuntar archivo (opcional)
+									</button>
 								)}
 							</div>
-							<textarea
-								value={att.message || ""}
-								onChange={(e) => updateAttachment(att.id, { message: e.target.value })}
-								placeholder="Texto que acompaña este envío en la rotación automática (caption del archivo, o el mensaje solo si no subís archivo)"
-								rows={2}
-								className="w-full px-3 py-1.5 bg-surface border border-outline-variant/30 rounded-lg text-[10px] text-on-surface focus:outline-none focus:border-primary resize-none"
-							/>
-						</div>
-					))}
+						);
+					})}
 				</div>
 			)}
 		</div>
