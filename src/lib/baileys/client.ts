@@ -69,7 +69,7 @@ import {
 	type GroupFailureReportRow,
 } from "../db.ts";
 import { lookupCase, getAgentMetrics, isDashBigConfigured } from "../dashbig-client.ts";
-import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, logNoConnectionReport, updatePendingOfflineReaction, getHorasCubrir, isHoraCubrirHHEE } from "../sheets-client.ts";
+import { getAgentSchedule, clearAgentAbsence, logAbsenceRemoval, queueAgentOffline, logNoConnectionReport, updatePendingOfflineReaction, getHorasCubrir, isHoraCubrirHHEE, findAgentSpreadsheetId, clearShiftChangeQueues } from "../sheets-client.ts";
 import { createCalendarEvent } from "../google-calendar-client.ts";
 import { runtimeCrmRepository } from "../repositories/runtime-crm.ts";
 import { outboxDestinationForConversation } from "../outbox-routing.ts";
@@ -492,7 +492,8 @@ function isReportTemplateMessage(text: string): boolean {
 // type so that tryRegisterEmailReply can chain back to the right flow.
 type PendingIntent =
 	| "absence" | "absence_date" | "absence_reason" | "offline" | "offline_reason" | "schedule" | "metrics" | "horas_lob"
-	| "appointment" | "appointment_role" | "appointment_phone" | "appointment_date" | "appointment_time" | "appointment_name";
+	| "appointment" | "appointment_role" | "appointment_phone" | "appointment_date" | "appointment_time" | "appointment_name"
+	| "shift_change_stuck";
 const pendingIntentKey = (phone: string) => `bot:pending_intent:${phone}`;
 const PENDING_INTENT_TTL = 300; // 5 minutes
 const horasLobListKey = (phone: string) => `bot:horas_lob_list:${phone}`;
@@ -564,6 +565,28 @@ const CANNOT_CONNECT_KEYWORDS = [
 
 function matchesCannotConnectIntent(msgLower: string): boolean {
 	return CANNOT_CONNECT_KEYWORDS.some((kw) => msgLower.includes(kw));
+}
+
+// "No puedo eliminar mi solicitud de cambio de turno" (por eso no puede hacer el cambio) — vacía
+// por completo las colas "cambios_pendientes" y "notificaciones" de la planilla del agente, no solo
+// su fila. Detección estricta a propósito (verbo de imposibilidad + verbo de eliminación + "solicitud"
+// + "cambio ... turno") porque la acción es destructiva sobre datos compartidos por todo el LOB.
+const SHIFT_CHANGE_STUCK_KEYWORDS = [
+	"no puedo eliminar mi solicitud de cambio de turno", "no puedo eliminar la solicitud de cambio de turno",
+	"no puedo borrar mi solicitud de cambio de turno", "no puedo borrar la solicitud de cambio de turno",
+	"no puedo cancelar mi solicitud de cambio de turno", "no puedo cancelar la solicitud de cambio de turno",
+	"no me deja eliminar mi solicitud de cambio de turno", "no me deja eliminar la solicitud de cambio de turno",
+	"no me deja borrar mi solicitud de cambio de turno", "no me deja cancelar la solicitud de cambio de turno",
+	"no pude eliminar mi solicitud de cambio de turno", "no pude eliminar la solicitud de cambio de turno",
+];
+
+function matchesShiftChangeStuckIntent(msgLower: string): boolean {
+	if (SHIFT_CHANGE_STUCK_KEYWORDS.some((kw) => msgLower.includes(kw))) return true;
+	const hasCannotClause  = /\bno\s+(puedo|pude|me\s+deja|logro|logré|logre)\b/.test(msgLower);
+	const hasRemovalVerb   = /\b(elimin[a-záéíóúñü]{0,6}|borr[a-záéíóúñü]{0,6}|cancel[a-záéíóúñü]{0,6})\b/.test(msgLower);
+	const hasRequestNoun   = /\bsolicitud(es)?\b/.test(msgLower);
+	const hasShiftChangeNoun = /\bcambio\b[a-záéíóúñü\s]{0,15}\bturno\b/.test(msgLower);
+	return hasCannotClause && hasRemovalVerb && hasRequestNoun && hasShiftChangeNoun;
 }
 
 // LOB sin sigla "conocida" fuera de cs/sm/po/go/ov (ver LOB_DETECT) que igual aparecen en los
@@ -1471,6 +1494,53 @@ async function finalizeAbsenceRemoval(
 	}
 }
 
+/**
+ * Un agente que no puede eliminar su solicitud de cambio de turno queda trabado y no puede
+ * realizar el cambio — se resetean por completo (solo encabezados) las pestañas
+ * "cambios_pendientes" y "notificaciones" de SU planilla (según en cuál de las dos
+ * programaciones configuradas figure su email), no solo su fila.
+ */
+async function tryClearShiftChangeQueuesReply(phone: string): Promise<string | null> {
+	const profile = await getAgentProfile(phone);
+	if (!profile) {
+		await redisClient.set(pendingIntentKey(phone), "shift_change_stuck", "EX", PENDING_INTENT_TTL);
+		return buildDirectReply(
+			"Para revisar tu solicitud de cambio de turno necesito tu email corporativo 📧",
+			'Respondé con tu email, ej: "luis@pedidosya.com"',
+		);
+	}
+
+	const settings = await getSettings();
+	const ids = [...new Set([
+		(settings.programacion_1_id as string) || "",
+		(settings.programacion_2_id as string) || "",
+	].filter(Boolean))];
+	if (!ids.length) {
+		return buildDirectReply("Las programaciones no están configuradas. Contactá al TL.");
+	}
+
+	try {
+		const targetId = await findAgentSpreadsheetId(profile.email, ids);
+		if (!targetId) {
+			return buildDirectReply(
+				"No pude ubicar tu planilla de programación para hacer la limpieza 😕",
+				"Consultá con el TL.",
+			);
+		}
+
+		const { cambiosPendientes, notificaciones } = await clearShiftChangeQueues(targetId);
+		const firstName = deriveFirstNameFromEmail(profile.email);
+		return buildDirectReply(
+			firstName ? `✅ Listo, ${firstName}: reinicié la cola de cambios de turno` : "✅ Reinicié la cola de cambios de turno",
+			`Se vaciaron cambios_pendientes (${cambiosPendientes} fila${cambiosPendientes === 1 ? "" : "s"}) y notificaciones (${notificaciones} fila${notificaciones === 1 ? "" : "s"}).`,
+			"Probá de nuevo desde la plataforma. Si sigue sin dejarte, avisale al TL.",
+		);
+	} catch (err) {
+		console.error("[shift-change-stuck] Error limpiando colas:", err);
+		return buildDirectReply("No pude limpiar la cola en este momento. Intentá de nuevo en unos minutos o avisale al TL.");
+	}
+}
+
 async function tryGoOfflineReply(phone: string, message: string): Promise<string | null> {
 	const profile = await getAgentProfile(phone);
 	if (!profile) {
@@ -2226,6 +2296,15 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 				);
 			}
 
+			if (pending === "shift_change_stuck") {
+				await redisClient.del(pendingIntentKey(phone));
+				const reply = await tryClearShiftChangeQueuesReply(phone);
+				return reply ?? buildDirectReply(
+					alreadyRegistered,
+					`Podés pedir: ${capabilities}`,
+				);
+			}
+
 			return buildDirectReply(
 				alreadyRegistered,
 				`Con él podés pedir: ${capabilities}.`,
@@ -2300,6 +2379,15 @@ async function tryRegisterEmailReply(phone: string, message: string): Promise<st
 	if (pending === "appointment" || pending === "appointment_role") {
 		await redisClient.del(pendingIntentKey(phone));
 		const reply = await tryScheduleAppointmentReply(phone, "");
+		return reply ?? buildDirectReply(
+			justRegistered,
+			`Podés pedir: ${capabilities}`,
+		);
+	}
+
+	if (pending === "shift_change_stuck") {
+		await redisClient.del(pendingIntentKey(phone));
+		const reply = await tryClearShiftChangeQueuesReply(phone);
 		return reply ?? buildDirectReply(
 			justRegistered,
 			`Podés pedir: ${capabilities}`,
@@ -2522,6 +2610,15 @@ export const inboundHandler = createInboundHandler({
 				const isAbsenceReasonFollowUp = pendingAbsence === "absence_reason";
 				if ((matchesAbsenceIntent(msgLower) || isAbsenceDateFollowUp || isAbsenceReasonFollowUp) && conv) {
 					const reply = await tryRemoveAbsenceReply(conv.phone, lastUserMsg);
+					if (reply) return reply;
+				}
+
+				// No puede eliminar su solicitud de cambio de turno → reset de las colas
+				// cambios_pendientes/notificaciones en su planilla (Google Sheets write)
+				const pendingShiftChangeStuck = conv ? await redisClient.get(pendingIntentKey(conv.phone)) : null;
+				const isShiftChangeStuckFollowUp = pendingShiftChangeStuck === "shift_change_stuck";
+				if ((matchesShiftChangeStuckIntent(msgLower) || isShiftChangeStuckFollowUp) && conv) {
+					const reply = await tryClearShiftChangeQueuesReply(conv.phone);
 					if (reply) return reply;
 				}
 

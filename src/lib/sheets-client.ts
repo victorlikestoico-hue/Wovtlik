@@ -415,6 +415,94 @@ export async function clearAgentAbsence(
 	return { success: true, fecha: target.fecha, horario: target.horario };
 }
 
+/**
+ * Busca en qué de los spreadsheets configurados figura el email del agente (hoja
+ * "Presentismo Equipo1", columna Email) — esa es su planilla/LOB, la misma que usan
+ * getAgentSchedule y clearAgentAbsence para ubicarlo.
+ */
+export async function findAgentSpreadsheetId(
+	agentEmail:     string,
+	spreadsheetIds: string[],
+): Promise<string | null> {
+	if (!SA_EMAIL || !SA_KEY) return null;
+	const emailNorm = agentEmail.trim().toLowerCase();
+
+	for (const id of spreadsheetIds) {
+		if (!id) continue;
+		try {
+			const { headers, rows } = await readSheetRaw(id);
+			const emailCol = headers.findIndex(h => /^email$/i.test(h));
+			if (emailCol < 0) continue;
+			if (rows.some(r => (r.cells[emailCol] ?? "").toLowerCase() === emailNorm)) return id;
+		} catch (err) {
+			console.error(`[sheets] Error buscando planilla del agente en ${id}:`, err);
+		}
+	}
+	return null;
+}
+
+async function getSheetGidByTitle(spreadsheetId: string, title: string): Promise<number | null> {
+	const token = await getAccessToken();
+	const metaRes = await fetch(
+		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties`,
+		{ headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
+	);
+	if (!metaRes.ok) throw new Error(`[sheets] Metadata error ${metaRes.status}: ${(await metaRes.text()).substring(0, 200)}`);
+	const meta = await metaRes.json() as { sheets: Array<{ properties: { sheetId: number; title: string } }> };
+	const sheet = meta.sheets.find(s => s.properties.title.toLowerCase() === title.toLowerCase());
+	return sheet ? sheet.properties.sheetId : null;
+}
+
+/** Elimina (de verdad, no solo vacía) todas las filas de datos de una pestaña, dejando intacta la fila 1 de encabezados. */
+async function deleteAllRowsExceptHeader(spreadsheetId: string, tabTitle: string): Promise<number> {
+	const gid = await getSheetGidByTitle(spreadsheetId, tabTitle);
+	if (gid === null) throw new Error(`[sheets] No se encontró la hoja "${tabTitle}" en ${spreadsheetId}`);
+
+	const { rows } = await readNamedSheetRaw(spreadsheetId, tabTitle);
+	if (rows.length === 0) return 0;
+
+	const token = await getAccessToken();
+	const res = await fetch(
+		`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
+		{
+			method:  "POST",
+			headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+			body:    JSON.stringify({
+				requests: [{
+					deleteDimension: {
+						range: {
+							sheetId:    gid,
+							dimension:  "ROWS",
+							startIndex: 1, // fila 2 en adelante (0-based); la fila 1 de encabezados queda intacta
+							endIndex:   1 + rows.length,
+						},
+					},
+				}],
+			}),
+			signal: AbortSignal.timeout(15_000),
+		},
+	);
+	if (!res.ok) throw new Error(`[sheets] Delete rows error ${res.status}: ${(await res.text()).substring(0, 200)}`);
+	return rows.length;
+}
+
+export type ShiftChangeQueuesClearResult = {
+	cambiosPendientes: number;
+	notificaciones:    number;
+};
+
+/**
+ * Vacía por completo (solo encabezados) las pestañas "cambios_pendientes" y "notificaciones"
+ * de la planilla del agente. Se usa cuando un agente reporta que no puede eliminar su
+ * solicitud de cambio de turno y por eso no puede realizar el cambio — un reset de la cola
+ * completa (de todos los agentes de esa planilla), no solo de su fila.
+ */
+export async function clearShiftChangeQueues(spreadsheetId: string): Promise<ShiftChangeQueuesClearResult> {
+	const cambiosPendientes = await deleteAllRowsExceptHeader(spreadsheetId, "cambios_pendientes");
+	const notificaciones    = await deleteAllRowsExceptHeader(spreadsheetId, "notificaciones");
+	return { cambiosPendientes, notificaciones };
+}
+
 const ABSENCE_REMOVAL_LOG_TAB = "eliminacion de ausencia";
 const ABSENCE_REMOVAL_LOG_HEADERS = ["timestamp", "email", "fecha", "horario", "motivo"];
 
