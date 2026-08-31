@@ -50,6 +50,12 @@ export interface WolftlsBlock {
 // markTlReactionAndUpdateSheet.
 export const WOLFTLS_COVERED_LOBS = ["fr", "im", "aj", "rv", "pdi"] as const;
 
+// Dueño del bot — usado por tl-coverage-cron.ts para disparar el anuncio de "Mi Cobertura" en
+// automático apenas el rooster le asigna un bloque, en vez de depender de un horario cargado a
+// mano (ver tl_coverage_schedule, ahora deprecado). También lo usa absence-alert-cron.ts para
+// saber la ventana horaria en la que ese anuncio automático deja al TL activo.
+export const MI_COBERTURA_EMAIL = "victor.garces_ndo.ext@pedidosya.com";
+
 const DAY_ORDER = ["L", "M", "X", "J", "V", "S", "D"] as const;
 export type DayLetter = (typeof DAY_ORDER)[number];
 
@@ -176,6 +182,18 @@ function findCurrentBlock(blocks: WolftlsBlock[], day: DayLetter, nowMin: number
 }
 
 /**
+ * Bloque del rooster de Wolftls vigente en el momento `at` (ahora por default), sin filtrar por
+ * LOB — un solo bloque cubre en conjunto todos los WOLFTLS_COVERED_LOBS (ver comentario de la
+ * interfaz WolftlsBlock). null si Wolftls no está configurado, la consulta falló sin caché
+ * previa, o hay un hueco real en el rooster para ese instante.
+ */
+export async function getCurrentCoverageBlock(at: Date = new Date()): Promise<WolftlsBlock | null> {
+	const blocks = await getBlocks();
+	if (blocks.length === 0) return null;
+	return findCurrentBlock(blocks, dayLetterUY(at), minutesOfDayUY(at));
+}
+
+/**
  * TL que el rooster de Wolftls dice que debería estar cubriendo `lob` en el momento `at` (ahora
  * por default), o null si: el LOB no está en WOLFTLS_COVERED_LOBS, Wolftls no está configurado
  * (env vars ausentes o planilla no compartida), la consulta falló sin caché previa, o no hay
@@ -186,13 +204,21 @@ export async function getScheduledTlForLob(
 	at: Date = new Date(),
 ): Promise<{ email: string; until: string } | null> {
 	if (!(WOLFTLS_COVERED_LOBS as readonly string[]).includes(lob)) return null;
-	const blocks = await getBlocks();
-	if (blocks.length === 0) return null;
-
-	const match = findCurrentBlock(blocks, dayLetterUY(at), minutesOfDayUY(at));
+	const match = await getCurrentCoverageBlock(at);
 	if (!match) return null;
-
 	return { email: match.mail.toLowerCase().trim(), until: match.end };
+}
+
+/**
+ * Bloque vigente en `at` SI Y SOLO SI está asignado a `email` — usado por tl-coverage-cron.ts y
+ * absence-alert-cron.ts para saber si el dueño del bot (MI_COBERTURA_EMAIL) está cubriendo ahora
+ * mismo, reusando la misma resolución de bloque (con soporte de cruce de medianoche) que
+ * getScheduledTlForLob.
+ */
+export async function getCurrentBlockForEmail(email: string, at: Date = new Date()): Promise<WolftlsBlock | null> {
+	const block = await getCurrentCoverageBlock(at);
+	if (!block) return null;
+	return block.mail.toLowerCase().trim() === email.toLowerCase().trim() ? block : null;
 }
 
 /**

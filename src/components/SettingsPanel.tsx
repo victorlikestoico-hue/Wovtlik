@@ -13,23 +13,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 
-interface DaySchedule {
-	enabled?: boolean;
-	start?: string;
-	end?: string;
-}
-
-// Mismas keys que usa scripts/tl-coverage-cron.ts para leer el horario del día en curso.
-const WEEKDAYS: Array<{ key: string; label: string }> = [
-	{ key: "mon", label: "Lunes" },
-	{ key: "tue", label: "Martes" },
-	{ key: "wed", label: "Miércoles" },
-	{ key: "thu", label: "Jueves" },
-	{ key: "fri", label: "Viernes" },
-	{ key: "sat", label: "Sábado" },
-	{ key: "sun", label: "Domingo" },
-];
-
 interface CustomSelectProps<T> {
 	value: T;
 	onChange: (value: T) => void;
@@ -869,47 +852,8 @@ export default function SettingsPanel() {
 						</div>
 					</div>
 					<p className="text-[9px] text-on-surface-variant/80">
-						El horario cambia según el día, así que configurá inicio y fin para cada uno. A la hora de inicio del día que corresponda, el bot manda el aviso de cobertura al grupo de desconexiones y te deja anotado como TL en turno para esos LOB hasta la hora de fin (así "quién es el TL de X" te arroba a vos). Desmarcá el día para que ese día no se mande nada.
+						El horario ya no se carga a mano: el bot consulta en tiempo real el rooster de Wolftls (Fraude/Across) y, apenas te asigna un bloque a vos, manda solo el aviso de cobertura al grupo de desconexiones con el horario real de ese bloque, y te deja anotado como TL en turno para los LOB de abajo hasta que termine (así "quién es el TL de X" te arroba a vos). El interruptor "Activo" es el único corte manual: apagalo para que no se mande nada aunque el rooster te asigne turno.
 					</p>
-					<div className="rounded-xl border border-outline-variant/20 overflow-hidden divide-y divide-outline-variant/15">
-						{WEEKDAYS.map(({ key, label }) => {
-							const daySchedule = (settings.tl_coverage_schedule?.[key] || {}) as DaySchedule;
-							const updateDay = (patch: Partial<DaySchedule>) => {
-								handleChange("tl_coverage_schedule", {
-									...(settings.tl_coverage_schedule || {}),
-									[key]: { ...daySchedule, ...patch },
-								});
-							};
-							return (
-								<div key={key} className="flex items-center gap-3 px-3 py-2 bg-surface-container-low/50">
-									<label className="flex items-center gap-2 w-24 shrink-0 cursor-pointer select-none">
-										<input
-											type="checkbox"
-											checked={!!daySchedule.enabled}
-											onChange={(e) => updateDay({ enabled: e.target.checked })}
-											className="size-4 rounded bg-surface-container-low border border-outline-variant/30 text-primary focus:ring-0"
-										/>
-										<span className="text-[10px] font-bold text-on-surface">{label}</span>
-									</label>
-									<input
-										type="time"
-										value={daySchedule.start || ""}
-										disabled={!daySchedule.enabled}
-										onChange={(e) => updateDay({ start: e.target.value })}
-										className="px-3 py-1.5 bg-surface-container-low border border-outline-variant/30 rounded-lg text-xs text-on-surface focus:outline-none focus:border-primary disabled:opacity-40"
-									/>
-									<span className="text-[9px] text-on-surface-variant/60">a</span>
-									<input
-										type="time"
-										value={daySchedule.end || ""}
-										disabled={!daySchedule.enabled}
-										onChange={(e) => updateDay({ end: e.target.value })}
-										className="px-3 py-1.5 bg-surface-container-low border border-outline-variant/30 rounded-lg text-xs text-on-surface focus:outline-none focus:border-primary disabled:opacity-40"
-									/>
-								</div>
-							);
-						})}
-					</div>
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div className="flex flex-col gap-1.5">
 							<label htmlFor="tl_coverage_phone" className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">

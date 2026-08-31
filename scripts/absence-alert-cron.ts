@@ -3,6 +3,7 @@ import { Redis } from "ioredis";
 import { getSettings } from "../src/lib/db.ts";
 import { getAgentProfileByEmail } from "../src/lib/db.ts";
 import { getAbsentAgentsWithoutJustification } from "../src/lib/sheets-client.ts";
+import { getCurrentBlockForEmail, MI_COBERTURA_EMAIL } from "../src/lib/wolftls-client.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
@@ -15,31 +16,8 @@ const ALERT_SENT_TTL_SECONDS = 26 * 60 * 60;
 const alertSentKey = (fecha: string, email: string, horario: string) =>
 	`bot:absence_alert_sent:${fecha}:${email}:${horario}`;
 
-// Mismas keys de día que usa SettingsPanel.tsx para tl_coverage_schedule y que ya
-// consume tl-coverage-cron.ts.
-const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
-
 function currentDateUruguayISO(): string {
 	return new Date().toLocaleDateString("en-CA", { timeZone: URUGUAY_TZ }); // en-CA => YYYY-MM-DD
-}
-
-function currentWeekdayKeyUruguay(): string {
-	const weekday = new Intl.DateTimeFormat("en-US", { timeZone: URUGUAY_TZ, weekday: "short" })
-		.format(new Date())
-		.toLowerCase();
-	return WEEKDAY_KEYS.includes(weekday as any) ? weekday : WEEKDAY_KEYS[new Date().getDay()];
-}
-
-function currentMinutesUruguay(): number {
-	const parts = new Intl.DateTimeFormat("en-GB", {
-		timeZone: URUGUAY_TZ,
-		hour: "2-digit",
-		minute: "2-digit",
-		hour12: false,
-	}).formatToParts(new Date());
-	const hour = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
-	const minute = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
-	return hour * 60 + minute;
 }
 
 function toMinutes(hhmm: string): number | null {
@@ -77,20 +55,18 @@ export async function runAbsenceAlertCronOnce(): Promise<
 > {
 	try {
 		const settings = await getSettings();
-		// Reutiliza exactamente la misma configuración de "Mi Cobertura en el Grupo de
-		// Desconexiones": esta alerta solo puede dispararse en los días/horarios en que ya
-		// hay un TL activo mirando el grupo. Fuera de esa ventana, el chequeo ni siquiera corre.
+		// Reutiliza exactamente la misma fuente que "Mi Cobertura en el Grupo de Desconexiones"
+		// (ver tl-coverage-cron.ts): esta alerta solo puede dispararse mientras el rooster de
+		// Wolftls dice que Victor está activamente cubriendo. Fuera de esa ventana, el chequeo ni
+		// siquiera corre.
 		if (!settings.tl_coverage_enabled) return "disabled";
 
-		const schedule = (settings.tl_coverage_schedule as Record<string, { enabled?: boolean; start?: string; end?: string }>) || {};
-		const todayKey = currentWeekdayKeyUruguay();
-		const daySchedule = schedule[todayKey];
-		if (!daySchedule?.enabled) return "disabled";
+		const myBlock = await getCurrentBlockForEmail(MI_COBERTURA_EMAIL);
+		if (!myBlock) return "not_due";
 
-		const startMin = toMinutes(daySchedule.start || "");
-		const endMin = toMinutes(daySchedule.end || "");
+		const startMin = toMinutes(myBlock.start);
+		const endMin = toMinutes(myBlock.end);
 		if (startMin === null || endMin === null) return "misconfigured";
-		if (!isWithinWindow(currentMinutesUruguay(), startMin, endMin)) return "not_due";
 
 		const spreadsheetIds = [
 			(settings.programacion_1_id as string) || "",

@@ -1,18 +1,25 @@
 import "./env-loader.ts";
 import { Redis } from "ioredis";
 import { getSettings, notifyTlCoverageAnnounced } from "../src/lib/db.ts";
+import { getScheduledBlocksForDay, MI_COBERTURA_EMAIL, type DayLetter } from "../src/lib/wolftls-client.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 
 const URUGUAY_TZ = "America/Montevideo";
 
-// Traba para no duplicar el envío del día si el bot tickea más de una vez dentro del
-// mismo minuto configurado (o se reinicia justo en ese instante).
-const tlCoverageSentDateKey = () => "bot:tl_coverage_last_sent_date";
+// Traba para no duplicar el envío de un mismo bloque del rooster si el bot tickea más de una
+// vez dentro del mismo minuto de inicio (o se reinicia justo en ese instante). Va por fecha+hora
+// de inicio (no solo por fecha) porque el rooster puede asignarle a Victor más de un bloque en
+// el mismo día.
+const tlCoverageSentBlockKey = (date: string, start: string) => `bot:tl_coverage_last_sent:${date}:${start}`;
 
 // Mismo formato de key que saveTlAnnouncement en client.ts — se escribe directo acá para
 // no tener que exportar internals de ese módulo solo para este cron.
 const tlAnnouncementKey = (lob: string) => `bot:tl_announcement:${lob}`;
+
+// Mismo orden que DAY_ORDER en wolftls-client.ts (L=lunes .. D=domingo), indexado a partir de
+// Date.getDay() (0=domingo) — ver yesterdayUruguay en tl-no-announced-report-cron.ts.
+const DAY_LETTERS: readonly DayLetter[] = ["D", "L", "M", "X", "J", "V", "S"];
 
 function currentDateUruguayISO(): string {
 	return new Date().toLocaleDateString("en-CA", { timeZone: URUGUAY_TZ }); // en-CA => YYYY-MM-DD
@@ -30,16 +37,10 @@ function currentHHmmUruguay(): string {
 	return `${hour}:${minute}`;
 }
 
-// Índice de Date.getDay() (0=domingo) → key del día, mismas keys que usa SettingsPanel.tsx
-// para guardar tl_coverage_schedule.
-const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
-
-/** Key del día actual ("mon".."sun") calculada en hora Uruguay, no en la del server. */
-function currentWeekdayKeyUruguay(): string {
-	const weekday = new Intl.DateTimeFormat("en-US", { timeZone: URUGUAY_TZ, weekday: "short" })
-		.format(new Date())
-		.toLowerCase(); // "mon", "tue", "wed", "thu", "fri", "sat", "sun"
-	return WEEKDAY_KEYS.includes(weekday as any) ? weekday : WEEKDAY_KEYS[new Date().getDay()];
+function currentDayLetterUruguay(): DayLetter {
+	const weekday = new Intl.DateTimeFormat("en-US", { timeZone: URUGUAY_TZ, weekday: "short" }).format(new Date());
+	const index = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"].indexOf(weekday.toLowerCase());
+	return DAY_LETTERS[index >= 0 ? index : 0];
 }
 
 /** Minutos transcurridos desde medianoche (hora Uruguay) para un "HH:mm". */
@@ -83,23 +84,28 @@ export async function runTlCoverageCronOnce(): Promise<
 		const settings = await getSettings();
 		if (!settings.tl_coverage_enabled) return "disabled";
 
-		const schedule = (settings.tl_coverage_schedule as Record<string, { enabled?: boolean; start?: string; end?: string }>) || {};
-		const todayKey = currentWeekdayKeyUruguay();
-		const daySchedule = schedule[todayKey];
-		if (!daySchedule?.enabled) return "disabled";
-
-		const start = daySchedule.start || "";
-		const end = daySchedule.end || "";
 		const phone = ((settings.tl_coverage_phone as string) || "").replace(/\D/g, "");
 		const lobsRaw = (settings.tl_coverage_lobs as string) || "";
 		const lobs = lobsRaw.split(",").map((l) => l.trim().toLowerCase()).filter(Boolean);
-		if (!start || !end || !phone || lobs.length === 0) return "misconfigured";
+		if (!phone || lobs.length === 0) return "misconfigured";
 
-		if (currentHHmmUruguay() !== start) return "not_due";
+		// Ya no depende de un horario cargado a mano (tl_coverage_schedule): dispara apenas el
+		// rooster de Wolftls le asigna a Victor un bloque que arranca ahora mismo, y usa el
+		// horario real de ese bloque (ver MI_COBERTURA_EMAIL en wolftls-client.ts).
+		const blocks = await getScheduledBlocksForDay(currentDayLetterUruguay());
+		const nowHHmm = currentHHmmUruguay();
+		const myBlock = blocks.find(
+			(b) => b.mail.toLowerCase().trim() === MI_COBERTURA_EMAIL && b.start === nowHHmm,
+		);
+		if (!myBlock) return "not_due";
+
+		const start = myBlock.start;
+		const end = myBlock.end;
 
 		const today = currentDateUruguayISO();
-		const alreadySentDate = await redisClient.get(tlCoverageSentDateKey());
-		if (alreadySentDate === today) return "skipped";
+		const dedupeKey = tlCoverageSentBlockKey(today, start);
+		const alreadySent = await redisClient.get(dedupeKey);
+		if (alreadySent) return "skipped";
 
 		const { globalSock, FALLAS_GROUP_JID, sendViaGlobalSock } = await import("../src/lib/baileys/client.ts");
 		if (!globalSock?.user?.id) {
@@ -142,8 +148,9 @@ export async function runTlCoverageCronOnce(): Promise<
 		);
 
 		// TTL largo (36h) solo para que la key no quede huérfana si el proceso se cae justo
-		// después de guardarla; el chequeo real de "ya se mandó hoy" es por fecha, no por TTL.
-		await redisClient.set(tlCoverageSentDateKey(), today, "EX", 36 * 60 * 60);
+		// después de guardarla; el chequeo real de "ya se mandó este bloque" es por fecha+hora
+		// de inicio, no por TTL.
+		await redisClient.set(dedupeKey, "1", "EX", 36 * 60 * 60);
 		return "sent";
 	} catch (err) {
 		console.error("[tl-coverage-cron] Error crítico ejecutando el tick:", err);
