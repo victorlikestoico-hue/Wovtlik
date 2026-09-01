@@ -2,7 +2,7 @@ import "./env-loader.ts";
 import { Redis } from "ioredis";
 import { getTlAnnouncementsForDay, notifyTlDailyMissedAnnouncements } from "../src/lib/db.ts";
 import { getTLDaySchedule, type TLDayBlock } from "../src/lib/tl-guardia.ts";
-import { getScheduledBlocksForDay, WOLFTLS_COVERED_LOBS } from "../src/lib/wolftls-client.ts";
+import { getScheduledBlocksForDay } from "../src/lib/wolftls-client.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 const URUGUAY_TZ = "America/Montevideo";
@@ -61,16 +61,16 @@ function nameFromEmail(email: string): string {
 
 export type MissedAnnouncement = { name: string; email: string | null; group: string; start: string; end: string };
 
-const CS_SM_LOBS = new Set(["cs", "sm"]);
-const PO_GO_LOBS = new Set(["po", "go"]);
-const WOLFTLS_LOBS = new Set<string>(WOLFTLS_COVERED_LOBS);
-
 /**
  * TL con turno asignado (rooster) para `dayIso` que nunca mandaron el "los acompaño con..." en el
  * grupo de desconexiones ese día. Cruza dos fuentes de turno independientes: el sheet de
  * tl-guardia.ts (CS/SM y PO/GO) y el rooster de Wolftls (Fraude/Across, ver WOLFTLS_COVERED_LOBS).
  * LOB sin rooster (ov, y los extra de client.ts sin fuente de turno) quedan afuera del reporte
  * porque no hay forma de saber si alguien tenía turno o no.
+ *
+ * Un TL cuenta como "anunciado" con que haya mandado el mensaje ese día, sin importar qué LOB
+ * puntual haya mencionado (ej. un TL de guardia CS/SM que anuncia "los acompaño con AJ" igual
+ * cuenta como anunciado): no se exige que el LOB del anuncio coincida con el grupo de su turno.
  *
  * "Rotación" (tl-guardia) se omite del reporte: no hay una persona puntual a quien atribuirle el
  * turno, así que reportarla generaría un falso "no anunciado".
@@ -80,25 +80,16 @@ export async function buildMissedAnnouncementsReport(
 	weekday: number,
 ): Promise<MissedAnnouncement[]> {
 	const announcements = await getTlAnnouncementsForDay(dayIso);
-	const announcedEmails = {
-		cs_sm: new Set(
-			announcements.filter((a) => a.email && CS_SM_LOBS.has(a.lob)).map((a) => a.email!.toLowerCase()),
-		),
-		po_go: new Set(
-			announcements.filter((a) => a.email && PO_GO_LOBS.has(a.lob)).map((a) => a.email!.toLowerCase()),
-		),
-		wolftls: new Set(
-			announcements.filter((a) => a.email && WOLFTLS_LOBS.has(a.lob)).map((a) => a.email!.toLowerCase()),
-		),
-	};
+	const announcedEmails = new Set(
+		announcements.filter((a) => a.email).map((a) => a.email!.toLowerCase()),
+	);
 
 	const misses: MissedAnnouncement[] = [];
 
 	const daySchedule: TLDayBlock[] = await getTLDaySchedule(weekday);
 	for (const block of daySchedule) {
 		if (block.isRotacion || !block.email) continue;
-		const announcedSet = block.group === "cs_sm" ? announcedEmails.cs_sm : announcedEmails.po_go;
-		if (announcedSet.has(block.email)) continue;
+		if (announcedEmails.has(block.email)) continue;
 		misses.push({
 			name: block.name,
 			email: block.email,
@@ -112,7 +103,7 @@ export async function buildMissedAnnouncementsReport(
 	const wolftlsBlocks = await getScheduledBlocksForDay(dayLetter);
 	for (const block of wolftlsBlocks) {
 		const email = block.mail.toLowerCase().trim();
-		if (!email || announcedEmails.wolftls.has(email)) continue;
+		if (!email || announcedEmails.has(email)) continue;
 		misses.push({
 			name: nameFromEmail(email),
 			email,
