@@ -1611,6 +1611,33 @@ async function sendGroupTextWithPresence(jid: string, text: string, mentions?: s
 	await globalSock?.sendPresenceUpdate("paused", jid).catch(() => {});
 }
 
+// La reacción ✅ de confirmación cae justo en una de las ~46 desconexiones/reconexiones diarias
+// (~5-10s cada una, ver isSocketConnected) con más frecuencia de lo que parece: sendViaGlobalSock
+// tira si el socket no está listo y no hay cola/retry para reacciones, así que sin este helper el
+// agente hacía todo el trabajo real (offline encolado, ausencia corregida, reporte confirmado) pero
+// nunca veía el check — mismo síntoma visible que abortar el procesamiento entero. Reintenta un par
+// de veces espaciado a la duración típica de una reconexión antes de rendirse (y loguearlo, en vez
+// de tragarse el error en silencio).
+async function sendReportReaction(lastMsgKey: any, reportId: number): Promise<void> {
+	const delaysMs = [6000, 15000];
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await sendViaGlobalSock(
+				lastMsgKey.remoteJid as string,
+				{ react: { text: "✅", key: lastMsgKey } },
+				{ kind: "reactive" },
+			);
+			return;
+		} catch (err) {
+			if (attempt >= delaysMs.length) {
+				console.error(`[fallas-group] No se pudo mandar la reacción ✅ del reporte ${reportId} tras reintentos:`, err);
+				return;
+			}
+			await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+		}
+	}
+}
+
 async function processFallasGroupReport(phone: string, senderName: string, lastMsgKey?: any): Promise<void> {
 	const debounceKey = fallasGroupDebounceKey(phone);
 	const raw = await redisClient.get(debounceKey);
@@ -1679,12 +1706,8 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 				console.error("[fallas-group] Error completando reacción de TL adelantada:", err),
 			);
 		}
-		if (queued.ok && lastMsgKey && globalSock && isSocketConnected) {
-			await sendViaGlobalSock(
-				lastMsgKey.remoteJid as string,
-				{ react: { text: "✅", key: lastMsgKey } },
-				{ kind: "reactive" },
-			);
+		if (queued.ok && lastMsgKey) {
+			await sendReportReaction(lastMsgKey, reportId);
 		}
 	} catch (err) {
 		console.error("[fallas-group] Error procesando offline directo:", err);
@@ -1762,12 +1785,8 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 		if (result.success) {
 			if (logSheetId) await logAbsenceRemoval(logSheetId, email, result.fecha, result.horario, motivo);
 			await markGroupFailureReportConfirmed(reportId, true);
-			if (lastMsgKey && globalSock && isSocketConnected) {
-				await sendViaGlobalSock(
-					lastMsgKey.remoteJid as string,
-					{ react: { text: "✅", key: lastMsgKey } },
-					{ kind: "reactive" },
-				);
+			if (lastMsgKey) {
+				await sendReportReaction(lastMsgKey, reportId);
 			}
 		} else if (result.reason === "not_found") {
 			await markGroupFailureReportConfirmed(reportId, false);
@@ -1849,12 +1868,8 @@ async function processCannotConnectReport(phone: string, senderName: string, las
 				console.error("[fallas-group] Error completando reacción de TL adelantada:", err),
 			);
 		}
-		if (logged.ok && lastMsgKey && globalSock && isSocketConnected) {
-			await sendViaGlobalSock(
-				lastMsgKey.remoteJid as string,
-				{ react: { text: "✅", key: lastMsgKey } },
-				{ kind: "reactive" },
-			);
+		if (logged.ok && lastMsgKey) {
+			await sendReportReaction(lastMsgKey, reportId);
 		}
 	} catch (err) {
 		console.error("[fallas-group] Error registrando reporte de no conexión a turno:", err);
