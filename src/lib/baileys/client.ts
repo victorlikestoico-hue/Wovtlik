@@ -1652,7 +1652,6 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 
 	// Sin correo identificado no hay a quién desconectar — se ignora sin pedir aclaraciones.
 	if (!email || reportId === null) return;
-	if (!(globalSock && isSocketConnected)) return;
 
 	const settings = await getSettings().catch(() => ({} as Record<string, unknown>));
 	const spreadsheetId = (settings.offline_queue_sheet_id as string) || "";
@@ -1680,7 +1679,7 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 				console.error("[fallas-group] Error completando reacción de TL adelantada:", err),
 			);
 		}
-		if (queued.ok && lastMsgKey) {
+		if (queued.ok && lastMsgKey && globalSock && isSocketConnected) {
 			await sendViaGlobalSock(
 				lastMsgKey.remoteJid as string,
 				{ react: { text: "✅", key: lastMsgKey } },
@@ -1737,7 +1736,6 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 
 	// Sin correo identificado no hay a quién corregirle la ausencia — se ignora sin pedir aclaraciones.
 	if (!email || reportId === null) return;
-	if (!(globalSock && isSocketConnected)) return;
 
 	const settings = await getSettings().catch(() => ({} as Record<string, unknown>));
 	const ids = [...new Set([
@@ -1764,7 +1762,7 @@ async function processAbsenceCorrectionReport(phone: string, senderName: string,
 		if (result.success) {
 			if (logSheetId) await logAbsenceRemoval(logSheetId, email, result.fecha, result.horario, motivo);
 			await markGroupFailureReportConfirmed(reportId, true);
-			if (lastMsgKey) {
+			if (lastMsgKey && globalSock && isSocketConnected) {
 				await sendViaGlobalSock(
 					lastMsgKey.remoteJid as string,
 					{ react: { text: "✅", key: lastMsgKey } },
