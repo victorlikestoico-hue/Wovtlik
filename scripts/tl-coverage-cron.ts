@@ -94,8 +94,12 @@ export async function runTlCoverageCronOnce(): Promise<
 		// horario real de ese bloque (ver MI_COBERTURA_EMAIL en wolftls-client.ts).
 		const blocks = await getScheduledBlocksForDay(currentDayLetterUruguay());
 		const nowHHmm = currentHHmmUruguay();
+		const nowMinutes = toMinutes(nowHHmm);
+		// Comparar por minutos (no por string exacto): la planilla de Wolftls guarda horas de un
+		// dígito sin cero adelante ("9:00"), que nunca matchea contra el "09:00" formateado acá —
+		// esto hacía que los bloques que arrancan antes de las 10 nunca dispararan el anuncio.
 		const myBlock = blocks.find(
-			(b) => b.mail.toLowerCase().trim() === MI_COBERTURA_EMAIL && b.start === nowHHmm,
+			(b) => b.mail.toLowerCase().trim() === MI_COBERTURA_EMAIL && toMinutes(b.start) === nowMinutes,
 		);
 		if (!myBlock) return "not_due";
 
