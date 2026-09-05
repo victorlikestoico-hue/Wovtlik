@@ -1203,8 +1203,15 @@ export async function deleteCrmTask(id: number): Promise<void> {
 
 export async function getAgentProfile(phone: string): Promise<AgentProfileRow | null> {
 	await ensureSchemaInitialized();
+	// Match exacto primero, y si no aparece, por los últimos 10 dígitos: un TL puede escribir en
+	// el grupo de fallas desde un número con prefijo de país distinto al que quedó guardado al
+	// registrarse (ej. con/sin "57" adelante), lo que con match exacto lo deja sin email resuelto
+	// y genera un falso "no se anunció" en el reporte diario (ver tl-no-announced-report-cron.ts).
 	const res = await pool.query<AgentProfileRow>(
-		"SELECT * FROM agent_profiles WHERE phone = $1 LIMIT 1",
+		`SELECT * FROM agent_profiles
+		 WHERE phone = $1 OR RIGHT(phone, 10) = RIGHT($1, 10)
+		 ORDER BY (phone = $1) DESC
+		 LIMIT 1`,
 		[phone],
 	);
 	return res.rows[0] ?? null;

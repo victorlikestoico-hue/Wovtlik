@@ -95,12 +95,21 @@ export async function runTlCoverageCronOnce(): Promise<
 		const blocks = await getScheduledBlocksForDay(currentDayLetterUruguay());
 		const nowHHmm = currentHHmmUruguay();
 		const nowMinutes = toMinutes(nowHHmm);
-		// Comparar por minutos (no por string exacto): la planilla de Wolftls guarda horas de un
-		// dígito sin cero adelante ("9:00"), que nunca matchea contra el "09:00" formateado acá —
-		// esto hacía que los bloques que arrancan antes de las 10 nunca dispararan el anuncio.
-		const myBlock = blocks.find(
-			(b) => b.mail.toLowerCase().trim() === MI_COBERTURA_EMAIL && toMinutes(b.start) === nowMinutes,
-		);
+		// Ventana [inicio, fin) en vez de minuto exacto: si el tick del minuto preciso de inicio se
+		// pierde (restart del proceso, contenedor tardando en levantar, event loop atrasado), el
+		// bloque quedaba sin anunciar el resto del día — ni WhatsApp ni Telegram, porque los dos
+		// dependen de este mismo match. El dedupe por fecha+hora de inicio (más abajo) sigue
+		// garantizando que se manda una sola vez aunque varios ticks caigan dentro de la ventana.
+		// (Comparación por minutos, no por string exacto: la planilla de Wolftls guarda horas de un
+		// dígito sin cero adelante, ej. "9:00", que nunca matchearía contra un "09:00" formateado acá.)
+		const myBlock = blocks.find((b) => {
+			if (b.mail.toLowerCase().trim() !== MI_COBERTURA_EMAIL) return false;
+			const startMinutes = toMinutes(b.start);
+			if (startMinutes === null || nowMinutes === null) return false;
+			let endMinutes = toMinutes(b.end) ?? startMinutes;
+			if (endMinutes <= startMinutes) endMinutes += 24 * 60; // cruza medianoche
+			return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+		});
 		if (!myBlock) return "not_due";
 
 		const start = myBlock.start;
