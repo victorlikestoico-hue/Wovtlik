@@ -3196,7 +3196,7 @@ export async function startWASocket() {
 			});
 
 			startOutboxProcessor();
-			startStaleTlReactionChecker();
+			// startStaleTlReactionChecker(); // desactivado: usuario pidió no avisar más por Telegram cuando un TL no reacciona/responde
 			void refreshAllProfilePictures();
 
 			if (profilePicInterval) clearInterval(profilePicInterval);
