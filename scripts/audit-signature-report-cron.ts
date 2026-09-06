@@ -50,13 +50,13 @@ function cooldownKey(dateISO: string): string {
 	return `bot:audit_signature_report:${dateISO}`;
 }
 
-interface AgentSignatureStat {
+export interface AgentSignatureStat {
 	agent: string;
 	total: number;
 	signed: number;
 }
 
-async function fetchUnsignedAgents(
+export async function fetchUnsignedAgents(
 	auditorEmail: string,
 	weekStartISO: string,
 	todayISO: string,
@@ -90,7 +90,7 @@ interface AgentContact {
 	firstName: string;
 }
 
-async function lookupAgentContacts(emails: Set<string>): Promise<Map<string, AgentContact>> {
+export async function lookupAgentContacts(emails: Set<string>): Promise<Map<string, AgentContact>> {
 	const { headers, rows } = await readSheetByGid(AGENTS_SHEET_ID, AGENTS_SHEET_GID);
 	const emailCol = headers.findIndex((h) => /^agentes$/i.test(h));
 	const phoneCol = headers.findIndex((h) => /^tel[eé]fono$/i.test(h));
@@ -111,7 +111,7 @@ async function lookupAgentContacts(emails: Set<string>): Promise<Map<string, Age
 	return map;
 }
 
-function buildMessage(firstName: string, stat: AgentSignatureStat): string {
+export function buildMessage(firstName: string, stat: AgentSignatureStat): string {
 	const greeting = firstName ? `Hola ${firstName}! 👋` : "Hola! 👋";
 	return [
 		greeting,
