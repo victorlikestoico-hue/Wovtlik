@@ -1,5 +1,11 @@
 // Disparo manual puntual del recordatorio de firma de auditorías (sin esperar a la ventana
 // viernes/sábado/domingo del cron). Reusa la misma lógica de audit-signature-report-cron.ts.
+//
+// No manda directo por globalSock: este script corre en un proceso Node aparte (via `railway
+// ssh`), que no comparte memoria con el bot-process real — su globalSock siempre está vacío acá.
+// En cambio encola cada mensaje en `group_announcements` (misma tabla que ya usa el panel para
+// anuncios programados) para que el bot-process YA corriendo lo mande con su propio socket vivo
+// en el próximo tick (cada 1s, ver start-bot.ts).
 import "./env-loader.ts";
 import {
 	fetchUnsignedAgents,
@@ -7,6 +13,7 @@ import {
 	buildMessage,
 } from "./audit-signature-report-cron.ts";
 import { MI_COBERTURA_EMAIL } from "../src/lib/wolftls-client.ts";
+import { enqueueGroupAnnouncement } from "../src/lib/db.ts";
 
 const COLOMBIA_TZ = "America/Bogota";
 
@@ -25,12 +32,6 @@ function mondayOfWeekISO(d: Date): string {
 }
 
 async function main() {
-	const { globalSock, sendViaGlobalSock } = await import("../src/lib/baileys/client.ts");
-	if (!globalSock?.user?.id) {
-		console.error("[send-audit-signature-now] Socket no autenticado, no se puede enviar.");
-		process.exit(1);
-	}
-
 	const now = colombiaDateNow();
 	const weekStartISO = mondayOfWeekISO(now);
 	const todayISO = colombiaDateISO(now);
@@ -48,10 +49,10 @@ async function main() {
 		}
 		const jid = `${contact.phone}@s.whatsapp.net`;
 		try {
-			await sendViaGlobalSock(jid, { text: buildMessage(contact.firstName, stat) }, { kind: "broadcast" });
-			console.log(`[send-audit-signature-now] Enviado a ${stat.agent} (${contact.phone}): ${stat.signed}/${stat.total} firmadas.`);
+			await enqueueGroupAnnouncement({ jid, text: buildMessage(contact.firstName, stat) });
+			console.log(`[send-audit-signature-now] Encolado para ${stat.agent} (${contact.phone}): ${stat.signed}/${stat.total} firmadas.`);
 		} catch (err) {
-			console.error(`[send-audit-signature-now] Falló el envío a ${stat.agent} (${contact.phone}):`, err);
+			console.error(`[send-audit-signature-now] Falló al encolar para ${stat.agent} (${contact.phone}):`, err);
 		}
 	}
 
