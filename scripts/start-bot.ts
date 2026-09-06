@@ -23,6 +23,7 @@ import { startTlCoverageCron } from "./tl-coverage-cron.ts";
 import { startAbsenceAlertCron } from "./absence-alert-cron.ts";
 import { startTlNoAnnouncedReportCron } from "./tl-no-announced-report-cron.ts";
 import { startFraudeRotationCron } from "./fraude-rotation-cron.ts";
+import { startAuditSignatureReportCron } from "./audit-signature-report-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -98,6 +99,10 @@ async function main() {
 	// Rotación cada 2hs de los archivos/mensajes cargados en Ajustes → "Archivos para el Grupo
 	// Fraude - Información", al grupo "Fraude - información" (solo si está habilitado ahí).
 	startFraudeRotationCron();
+
+	// Recordatorio directo a cada agente (viernes/sábado/domingo, 9h Colombia) que no llegó al
+	// 100% de firma de sus auditorías esta semana (Monitor de Auditorías + BigQuery).
+	startAuditSignatureReportCron();
 
 	const heartbeat = startHangWatchdog();
 
