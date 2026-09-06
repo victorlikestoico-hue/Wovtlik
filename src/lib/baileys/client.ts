@@ -3383,8 +3383,12 @@ export async function startWASocket() {
 				}
 			}
 
+			// FALLAS_GROUP_SEND_ONLY: cuando este número es un miembro secundario del grupo de
+			// desconexiones (ej. el bot de un TL que rota cobertura mientras el bot principal ya
+			// procesa el grupo), no reacciona a los mensajes entrantes — solo manda sus propios
+			// anuncios (Mi Cobertura). Evita reacciones/respuestas duplicadas en el grupo.
 			const fallasJid = await getFallasGroupJid();
-			if (!msg.key.fromMe && msg.key?.remoteJid === fallasJid) {
+			if (!msg.key.fromMe && msg.key?.remoteJid === fallasJid && process.env.FALLAS_GROUP_SEND_ONLY !== "true") {
 				try {
 					await handleFallasGroupMessage(msg);
 				} catch (err) {

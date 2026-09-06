@@ -68,8 +68,12 @@ async function main() {
 	// Recordatorios de citas agendadas (cliente, agente y Telegram)
 	startAppointmentsCron();
 
-	// Recordatorio cada 4hs en el grupo de fallas de qué datos enviar (correo, motivo, LOB)
-	startFallasTemplateCron();
+	// Recordatorio cada 4hs en el grupo de fallas de qué datos enviar (correo, motivo, LOB).
+	// Se omite si este bot es un miembro secundario del grupo (FALLAS_GROUP_SEND_ONLY) para no
+	// duplicar el recordatorio que ya manda el bot principal de ese grupo.
+	if (process.env.FALLAS_GROUP_SEND_ONLY !== "true") {
+		startFallasTemplateCron();
+	}
 
 	// Anuncio cada 1h en el grupo "Anuncios Horas CS" de los LOBs con horas extra sin cubrir
 	startHorasCubrirCron();
