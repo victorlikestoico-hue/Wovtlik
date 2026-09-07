@@ -257,22 +257,15 @@ export function formatTlDailyMissedAnnouncementsNotification(
 }
 
 export function createTelegramNotifier(config: TelegramNotifierConfig) {
-	async function sendText(text: string): Promise<TelegramNotificationResult> {
-		if (!hasConfig(config)) {
-			return {
-				ok: false,
-				status: "skipped",
-				reason: "missing_config",
-				userMessage: "Telegram notification skipped: missing configuration.",
-			};
-		}
-
+	// chatId admite varios destinatarios separados por coma (ej. "6685838889,8945487677")
+	// para que un mismo bot le avise a más de una persona sin duplicar la config por caller.
+	async function sendToOne(chatId: string, text: string): Promise<TelegramNotificationResult> {
 		try {
-			const response = await config.fetch(telegramSendMessageUrl(config), {
+			const response = await config.fetch(telegramSendMessageUrl(config as TelegramNotifierConfig & { botToken: string }), {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
-					chat_id: config.chatId,
+					chat_id: chatId,
 					text,
 					parse_mode: "HTML",
 					disable_web_page_preview: true,
@@ -302,6 +295,21 @@ export function createTelegramNotifier(config: TelegramNotifierConfig) {
 				userMessage: "Telegram notification failed; caller turn can continue.",
 			};
 		}
+	}
+
+	async function sendText(text: string): Promise<TelegramNotificationResult> {
+		if (!hasConfig(config)) {
+			return {
+				ok: false,
+				status: "skipped",
+				reason: "missing_config",
+				userMessage: "Telegram notification skipped: missing configuration.",
+			};
+		}
+
+		const chatIds = config.chatId.split(",").map((id) => id.trim()).filter(Boolean);
+		const results = await Promise.all(chatIds.map((chatId) => sendToOne(chatId, text)));
+		return results.find((r) => !r.ok) ?? results[0];
 	}
 
 	return {
