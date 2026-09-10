@@ -77,6 +77,7 @@ import { type SendKind } from "../send-pacing.ts";
 import { enqueueSocketSend, getQueuedSendCount, setSendDelayMultiplierProvider } from "../send-queue.ts";
 import { markSessionLinked, getWarmupPhase, warmupDelayMultiplier } from "../warmup-throttle.ts";
 import { getScheduledTlForLob, WOLFTLS_COVERED_LOBS } from "../wolftls-client.ts";
+import { getTLEnTurno, normalizeLOB } from "../tl-guardia.ts";
 
 // El pacing entre envíos se alarga automáticamente durante el período de calentamiento
 // posterior a cualquier relogin con sesión nueva (ver warmup-throttle.ts).
@@ -2942,11 +2943,18 @@ function formatUyTime(iso: string | null | undefined): string | null {
  * de TL desde hace TL_STALE_FIRST_ALERT_MINUTES y avisa por Telegram, arrobando quién es el TL en
  * turno para ese LOB y hasta qué hora dijo (o le tocaba) cubrir — para que quede claro a quién
  * corresponde el tiempo que se está acumulando ahí. Prioriza el anuncio manual del grupo (más
- * específico, lo escribió el TL mismo); si nadie anunció nada para ese LOB, cae al rooster de
- * Wolftls (ver wolftls-client.ts) — así el aviso sigue identificando al TL responsable aunque
- * jamás haya escrito "los acompaño con...". Es un aviso único por reporte: pasados
- * TL_STALE_CUTOFF_MINUTES sin reacción se deja de considerar (ver
- * listStaleUnreactedGroupFailureReports).
+ * específico, lo escribió el TL mismo); si nadie anunció nada para ese LOB, cae a una fuente de
+ * turno automática: el rooster de Wolftls para los LOB de Fraude/Across (ver wolftls-client.ts) o,
+ * para CS/SM/PO/GO, el sheet de guardias (ver tl-guardia.ts) — así el aviso sigue identificando al
+ * TL responsable aunque jamás haya escrito "los acompaño con...".
+ *
+ * Si ninguna fuente identifica a un TL puntual en turno para ese LOB (o el slot vigente figura
+ * como "Rotación", sin una persona puntual a quien atribuírselo) NO se avisa: no tiene sentido
+ * reclamar por un "TL sin responder" cuando en los hechos no hay nadie en turno — eso solo generaba
+ * ruido en Telegram por reportes que agentes etiquetan/arroban a un TL que no está de guardia.
+ *
+ * Es un aviso único por reporte: pasados TL_STALE_CUTOFF_MINUTES sin reacción se deja de considerar
+ * (ver listStaleUnreactedGroupFailureReports).
  */
 async function checkStaleTlReactions(): Promise<void> {
 	let stale: GroupFailureReportRow[];
@@ -2978,8 +2986,24 @@ async function checkStaleTlReactions(): Promise<void> {
 				tlPhone = scheduledProfile?.phone ?? null;
 				tlUntil = scheduled.until;
 				tlSource = "rooster";
+			} else {
+				// LOB fuera del rooster de Wolftls (CS/SM/PO/GO): cae al sheet de guardias, que es la
+				// fuente real de "quién tiene turno" para esos grupos.
+				const normalized = normalizeLOB(report.lob);
+				const turno = normalized ? await getTLEnTurno(normalized).catch(() => null) : null;
+				if (turno?.found && !turno.isRotacion) {
+					const turnoProfile = turno.email ? await getAgentProfileByEmail(turno.email).catch(() => null) : null;
+					tlName = turno.name;
+					tlPhone = turnoProfile?.phone ?? null;
+					tlUntil = turno.finUY;
+					tlSource = "rooster";
+				}
 			}
 		}
+
+		// Sin TL puntual identificado en turno para este LOB (ni anuncio manual, ni rooster, ni sheet
+		// de guardias — o el slot vigente es "Rotación") no hay a quién reclamarle: no se alerta.
+		if (!tlName) continue;
 
 		try {
 			// notifyTlNotResponding no rechaza la promesa en un fallo de la API de Telegram (ver

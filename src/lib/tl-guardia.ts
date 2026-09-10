@@ -29,7 +29,7 @@ const LOB_COL: Record<string, number | null> = {
 };
 
 export type TLResult =
-	| { found: true;  name: string; finUY: string; finCOL: string; isRotacion: boolean }
+	| { found: true;  name: string; email: string | null; finUY: string; finCOL: string; isRotacion: boolean }
 	| { found: false; reason: "no_column" | "no_data" | "error" };
 
 export type TLDayBlock = {
@@ -122,6 +122,7 @@ export async function getTLEnTurno(lob: string): Promise<TLResult> {
 				return {
 					found: true,
 					name,
+					email: isRotacion ? null : cell.toLowerCase(),
 					finUY:  finStr,
 					finCOL: subtractTwoHours(finStr),
 					isRotacion,

@@ -2,7 +2,7 @@ import "./env-loader.ts";
 import { Redis } from "ioredis";
 import { getTlAnnouncementsForDay, notifyTlDailyMissedAnnouncements } from "../src/lib/db.ts";
 import { getTLDaySchedule, type TLDayBlock } from "../src/lib/tl-guardia.ts";
-import { getScheduledBlocksForDay } from "../src/lib/wolftls-client.ts";
+import { getScheduledBlocksForDay, WOLFTLS_COVERED_LOBS } from "../src/lib/wolftls-client.ts";
 
 const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 const URUGUAY_TZ = "America/Montevideo";
@@ -59,6 +59,19 @@ function nameFromEmail(email: string): string {
 	return name.split(".").map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
 }
 
+/** Mismo criterio que formatLobList en telegram-notifier.ts / tl-coverage-cron.ts: "AJ, RV, PDI, FR
+ * & IM" — las siglas con las que el bot y los TL se anuncian de verdad, nunca "Fraude"/"Across"
+ * (esos son solo los nombres de los grupos de WhatsApp que arma el rooster de Wolftls). */
+function formatLobList(lobs: readonly string[]): string {
+	const upper = lobs.map((l) => l.toUpperCase());
+	if (upper.length <= 1) return upper.join("");
+	return `${upper.slice(0, -1).join(", ")} & ${upper[upper.length - 1]}`;
+}
+
+// Un solo bloque del rooster de Wolftls cubre en conjunto todos los WOLFTLS_COVERED_LOBS (ver
+// wolftls-client.ts), así que la etiqueta es la misma para todos los misses de esa fuente.
+const WOLFTLS_LOB_LABEL = formatLobList(WOLFTLS_COVERED_LOBS);
+
 export type MissedAnnouncement = { name: string; email: string | null; group: string; start: string; end: string };
 
 /**
@@ -107,7 +120,7 @@ export async function buildMissedAnnouncementsReport(
 		misses.push({
 			name: nameFromEmail(email),
 			email,
-			group: "Fraude/Across",
+			group: WOLFTLS_LOB_LABEL,
 			start: block.start,
 			end: block.end,
 		});
