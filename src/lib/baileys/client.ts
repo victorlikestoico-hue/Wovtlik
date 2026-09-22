@@ -774,14 +774,20 @@ function isEndOfShiftReassignRequest(msgLower: string): boolean {
 }
 
 // Temas que a veces llegan al grupo de fallas con el mismo formato del formulario (correo +
-// motivo + LOB) pero que NO son una falla de conectividad — dudas de horario de almuerzo o
-// errores de Slack. No hay nada que desconectar acá: si se encolaran igual que una falla real
-// (queueAgentOffline → status "pending"), el Monitor externo terminaría desconectando al agente
-// por algo que no tiene nada que ver con su turno.
+// motivo + LOB) pero que NO son una falla de conectividad — ej. errores de Slack. No hay nada
+// que desconectar acá: si se encolaran igual que una falla real (queueAgentOffline → status
+// "pending"), el Monitor externo terminaría desconectando al agente por algo que no tiene nada
+// que ver con su turno.
+//
+// Almuerzo/lunch NO va en esta lista a propósito: a diferencia de Slack, el agente sí deja de
+// atender casos durante el almuerzo, así que este reporte debe encolarse como una desconexión
+// real (queueAgentOffline → status "pending") para que el Monitor le retire los chats/casos
+// igual que en cualquier otra desconexión.
 const NON_DISCONNECTION_TOPIC_KEYWORDS = [
 	"slack",
-	"almuerzo", "lunch", "hora de comer", "hora de comida",
 ];
+
+const LUNCH_PATTERN = /almuerzo|\blunch|hora de comer|hora de comida/;
 
 /** true si el motivo del reporte es un tema que no amerita desconectar al agente (ver arriba). */
 function isNonDisconnectionTopic(text: string): boolean {
@@ -793,6 +799,7 @@ function isNonDisconnectionTopic(text: string): boolean {
 function classifyFailureReason(text: string): string {
 	const lower = text.toLowerCase();
 	if (isEndOfShiftReassignRequest(lower)) return "Fin de turno con casos pendientes de reasignar";
+	if (LUNCH_PATTERN.test(lower)) return "Lunch";
 	if (lower.includes("luz") || lower.includes("energ") || lower.includes("corriente")
 		|| lower.includes("apag") || lower.includes("electric")) return "Falla de luz / energía eléctrica";
 	if (/\bpc\b/.test(lower) || lower.includes("computador") || lower.includes("equipo")
@@ -1688,10 +1695,10 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 	try {
 		let queued: { ok: boolean; row: number | null };
 		if (isNonDisconnection) {
-			// Slack, dudas de almuerzo, etc.: se deja constancia en la planilla (misma pestaña
-			// "pending_offline") pero con status/result "ok" en vez de "pending" — igual que
-			// logNoConnectionReport — para que el Monitor externo NO lo tome como una
-			// desconexión a ejecutar. No hay nada que desconectar acá.
+			// Slack y similares (ver NON_DISCONNECTION_TOPIC_KEYWORDS): se deja constancia en la
+			// planilla (misma pestaña "pending_offline") pero con status/result "ok" en vez de
+			// "pending" — igual que logNoConnectionReport — para que el Monitor externo NO lo
+			// tome como una desconexión a ejecutar. No hay nada que desconectar acá.
 			queued = await logNoConnectionReport(email, reason, spreadsheetId, lob);
 		} else {
 			const queueReason = `${failureType}${lob ? ` — LOB ${lob}` : ""} (reportado en grupo de fallas)`;
