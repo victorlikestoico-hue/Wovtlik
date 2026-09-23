@@ -3151,6 +3151,27 @@ export async function startWASocket() {
 
 	sock.ev.on("creds.update", saveCreds);
 
+	// Baileys bufferea messages.upsert (y demás eventos) desde que conecta hasta que WhatsApp
+	// manda <ib><offline/></ib> ("terminé de entregar pendientes"). Incidente 2026-09-23: con
+	// ~90 mensajes fromMe indescifrables de otro dispositivo vinculado en la cola offline, ese
+	// nodo nunca llegó y el bot quedó "conectado" pero sordo (0 upserts durante >1h). Si no llega
+	// a tiempo, se vacía el buffer a mano; si llega después, su flush es inofensivo.
+	let offlineFlushTimer: NodeJS.Timeout | null = null;
+	sock.ev.on("connection.update", (update: any) => {
+		if (update.connection === "open" && !offlineFlushTimer) {
+			offlineFlushTimer = setTimeout(() => {
+				if (globalSock !== sock) return;
+				console.warn(
+					"[bot-warning] WhatsApp no confirmó el fin de los mensajes pendientes (offline) en 30s. Liberando el buffer de eventos para no quedar sordo.",
+				);
+				sock.ev.flush();
+			}, 30_000);
+		}
+		if (update.receivedPendingNotifications || update.connection === "close") {
+			if (offlineFlushTimer) clearTimeout(offlineFlushTimer);
+		}
+	});
+
 	sock.ev.on("connection.update", async (update: any) => {
 		const { connection, lastDisconnect, qr } = update;
 
