@@ -1,3 +1,21 @@
+diff --git a/node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js b/node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js
+index c46b096..38580f5 100644
+--- a/node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js
++++ b/node_modules/@whiskeysockets/baileys/lib/Socket/messages-recv.js
+@@ -54,7 +54,12 @@ export const makeMessagesRecvSocket = (config) => {
+             (tag !== 'message' || getBinaryNodeChild({ tag, attrs, content }, 'unavailable') || errorCode !== 0)) {
+             stanza.attrs.type = attrs.type;
+         }
+-        if (tag === 'message' && getBinaryNodeChild({ tag, attrs, content }, 'unavailable')) {
++        // Backport de upstream (src/Utils/stanza-ack.ts, buildAckStanza): WA Web siempre manda
++        // `from` en los ACK de clase message. Hipotesis (2026-09-23): sin el, el servidor no da
++        // por confirmados los mensajes fromMe de otro dispositivo vinculado que no se pudieron
++        // descifrar, los reentrega en cada reconexion y corta el stream con
++        // <stream:error><ack class="message" .../> (status 500) cada ~50 min.
++        if (tag === 'message') {
+             stanza.attrs.from = authState.creds.me.id;
+         }
+         logger.debug({ recv: { tag, attrs }, sent: stanza.attrs }, 'sent ack');
 diff --git a/node_modules/@whiskeysockets/baileys/lib/Utils/use-multi-file-auth-state.js b/node_modules/@whiskeysockets/baileys/lib/Utils/use-multi-file-auth-state.js
 index dc8182c..1b0a952 100644
 --- a/node_modules/@whiskeysockets/baileys/lib/Utils/use-multi-file-auth-state.js

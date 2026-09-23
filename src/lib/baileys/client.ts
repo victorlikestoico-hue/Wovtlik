@@ -97,6 +97,10 @@ for (const dir of [authDir, dataDir]) {
 
 const UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const EMAIL_REGEX = /[\w.+%-]+@[\w-]+\.[\w.]+/;
+// Correo con el dominio cortado o incompleto ("nombre.apellido_ndo.ext@pedidos",
+// "...@pedidosya. Lin"): el dominio igual se descarta y se reconstruye con
+// buildFullCorporateEmail, así que alcanza con un local-part "nombre.apellido" seguido de @.
+const TRUNCATED_EMAIL_REGEX = /[\w+%-]+(?:\.[\w+%-]+)+@/;
 const METRICS_KEYWORDS = [
 	"métrica", "metrica",
 	"cómo voy", "como voy",
@@ -1656,7 +1660,7 @@ async function processFallasGroupReport(phone: string, senderName: string, lastM
 	const reason = parts.join(" ").trim();
 	if (!reason) return; // sin motivo no hay nada que procesar
 
-	const emailMatch = reason.match(EMAIL_REGEX);
+	const emailMatch = reason.match(EMAIL_REGEX) ?? reason.match(TRUNCATED_EMAIL_REGEX);
 	// El dominio/sufijo que haya puesto el agente se descarta siempre y se reconstruye con
 	// buildFullCorporateEmail — igual que en tryRegisterEmailReply — para no grabar en la
 	// planilla un typo de dominio (ej. "pedidisya.com") tal cual lo escribió el agente.
