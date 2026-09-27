@@ -15,6 +15,7 @@ import { Redis } from "ioredis";
 import { createIoredisTurnState } from "../redis-adapter.ts";
 import { createInboundHandler } from "./inbound-handler.ts";
 import { normalizeProfileStatus } from "./profile.ts";
+import { extractLidPhonePairs, resolveGroupSender } from "./lid-resolver.ts";
 import { runtimePaths, clearDirectoryContents, getInstanceAuthDir } from "../runtime-paths.ts";
 import {
 	createConfiguredChatClient,
@@ -441,18 +442,23 @@ async function getFallasGroupJid(): Promise<string> {
 	return jid;
 }
 
-/** El participante de un grupo puede venir como @lid; participantPn trae el teléfono real. */
-function resolveFallasGroupSenderPhone(msg: any): string | undefined {
-	const participantPn = msg.key?.participantPn as string | undefined;
-	if (participantPn) return participantPn.replace(/\D/g, "");
+/**
+ * El participante de un grupo puede venir como @lid; participantPn trae el teléfono real. Si no
+ * viene y el @lid no está en memoria, se busca en Redis (mapeos aprendidos antes de un redeploy)
+ * y, como último recurso, se usan los dígitos del @lid (ver lid-resolver.ts).
+ */
+async function resolveFallasGroupSenderPhone(msg: any): Promise<string | undefined> {
 	const participant = msg.key?.participant as string | undefined;
-	if (!participant) return undefined;
-	if (participant.endsWith("@s.whatsapp.net")) return participant.replace(/\D/g, "");
-	if (participant.endsWith("@lid")) {
-		const mapped = lidToPhoneJid.get(participant);
-		if (mapped) return mapped.replace(/\D/g, "");
+	if (!msg.key?.participantPn && participant?.endsWith("@lid")) {
+		await lookupLidPhoneFromRedis(participant);
 	}
-	return undefined;
+	const resolved = resolveGroupSender(msg.key, (lid) => lidToPhoneJid.get(lid));
+	if (resolved?.source === "lid") {
+		console.warn(
+			`[fallas-group] Remitente @lid sin número resuelto (participant=${participant}, pushName=${msg.pushName ?? "?"}) — se procesa con el @lid como identificador.`,
+		);
+	}
+	return resolved?.phone;
 }
 
 /** Detecta si mencionan haber llenado (o no) el formulario/archivo de desconexión. */
@@ -1969,10 +1975,10 @@ async function markTlReactionAndUpdateSheet(
 
 /** Detecta un mensaje del grupo de fallas y programa su procesamiento agregado por agente. */
 async function handleFallasGroupMessage(msg: any): Promise<void> {
-	const phone = resolveFallasGroupSenderPhone(msg);
+	const phone = await resolveFallasGroupSenderPhone(msg);
 	if (!phone) {
-		// Remitente @lid sin mapeo a número todavía — el reporte no se puede atribuir y se
-		// descarta. Se loguea para poder medir si esto explica reportes "ignorados".
+		// Sin participant en absoluto no hay nada que atribuir. Los @lid sin número ya no caen
+		// acá: se procesan con el @lid como identificador (ver resolveFallasGroupSenderPhone).
 		console.warn(
 			`[fallas-group] Mensaje descartado: no se pudo resolver el número del remitente (participant=${msg.key?.participant ?? "?"}, pushName=${msg.pushName ?? "?"}).`,
 		);
@@ -2447,6 +2453,24 @@ const turnState = createIoredisTurnState(redisClient as any);
 // from a LID JID instead of their phone JID. Without this map the extracted
 // "phone" would be the LID number (not the real phone), breaking profile lookups.
 const lidToPhoneJid = new Map<string, string>();
+
+// El mapa en memoria se pierde en cada redeploy (el contenedor es efímero, ver README), así que
+// cada par aprendido se guarda también en Redis y se consulta ahí cuando el mapa no lo tiene.
+const LID_PN_REDIS_PREFIX = "lidpn:";
+
+function rememberLidPhone(lidJid: string, phoneJid: string): void {
+	if (lidToPhoneJid.get(lidJid) === phoneJid) return;
+	lidToPhoneJid.set(lidJid, phoneJid);
+	redisClient.set(`${LID_PN_REDIS_PREFIX}${lidJid}`, phoneJid).catch((err) =>
+		console.error("[lid] Error guardando mapeo @lid→teléfono en Redis:", err),
+	);
+}
+
+async function lookupLidPhoneFromRedis(lidJid: string): Promise<void> {
+	if (lidToPhoneJid.has(lidJid)) return;
+	const stored = await redisClient.get(`${LID_PN_REDIS_PREFIX}${lidJid}`).catch(() => null);
+	if (stored) lidToPhoneJid.set(lidJid, stored);
+}
 
 // Último intento de assertSessions por JID (epoch ms) — evita releer/reforzar la misma sesión
 // decenas de veces seguidas cuando llega una ráfaga de mensajes fallidos del mismo remitente en
@@ -3422,13 +3446,11 @@ export async function startWASocket() {
 	sock.ev.on("messages.upsert", async (upsert: any) => {
 		// Pre-populate LID→phone map from incoming messages that carry senderPn.
 		// This ensures canonicalChatJid can resolve @lid JIDs even before contacts events fire.
+		// También aprende de mensajes de grupo (participant @lid + participantPn), así un agente
+		// que alguna vez escribió con el número visible queda resuelto aunque después no lo traiga.
 		for (const msg of upsert.messages || []) {
-			if (msg.key?.remoteJid?.endsWith("@lid") && msg.key?.senderPn && !msg.key?.fromMe) {
-				const lidJid = msg.key.remoteJid as string;
-				const phoneJid = (msg.key.senderPn as string).endsWith("@s.whatsapp.net")
-					? (msg.key.senderPn as string)
-					: `${msg.key.senderPn}@s.whatsapp.net`;
-				lidToPhoneJid.set(lidJid, phoneJid);
+			for (const [lidJid, phoneJid] of extractLidPhonePairs(msg.key)) {
+				rememberLidPhone(lidJid, phoneJid);
 			}
 		}
 
@@ -3526,14 +3548,14 @@ export async function startWASocket() {
 		// We store lid→phoneJid so canonicalChatJid can resolve incoming @lid messages.
 		if (contact.id?.endsWith("@s.whatsapp.net") && contact.lid) {
 			const lidJid = contact.lid.endsWith("@lid") ? contact.lid : `${contact.lid}@lid`;
-			lidToPhoneJid.set(lidJid, contact.id);
+			rememberLidPhone(lidJid, contact.id);
 		}
 		// Also handle the inverse: id is @lid, verifiedName or senderPn gives us the phone
 		if (contact.id?.endsWith("@lid") && contact.senderPn) {
 			const phoneJid = contact.senderPn.endsWith("@s.whatsapp.net")
 				? contact.senderPn
 				: `${contact.senderPn}@s.whatsapp.net`;
-			lidToPhoneJid.set(contact.id, phoneJid);
+			rememberLidPhone(contact.id, phoneJid);
 		}
 	}
 
