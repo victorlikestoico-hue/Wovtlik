@@ -5,8 +5,18 @@ import { waitBetweenSends, type SendKind } from "./send-pacing.ts";
 // mismo tiempo, el bot le contesta/escribe a muchos contactos distintos en paralelo — ese patrón
 // es la señal de bot/spam más fuerte que detectan los sistemas anti-abuso de WhatsApp.
 // Serializamos todas las tareas de envío en una sola cadena y espaciamos con pacing tipo humano.
-let sendChainPromise: Promise<void> = Promise.resolve();
-let queuedSendCount = 0;
+//
+// Excepción: las reacciones ✅ del grupo de fallas van en un carril propio. Antes compartían la
+// cadena con respuestas de IA/crons y, cuando 2-3 agentes reportaban a la vez, cada ✅ quedaba
+// esperando detrás de todo lo demás (3-8s por envío + pausas largas de 20-45s) — visto desde el
+// grupo, el bot atendía a uno y parecía sordo para el resto. Dentro del carril de reacciones se
+// sigue serializando y espaciando (pacing "reaction"), solo que sin hacer fila detrás del resto.
+type SendLane = "main" | "reaction";
+
+const lanes: Record<SendLane, { chain: Promise<void>; count: number }> = {
+	main: { chain: Promise.resolve(), count: 0 },
+	reaction: { chain: Promise.resolve(), count: 0 },
+};
 
 // Multiplicador opcional aplicado al delay entre envíos (usado por el throttle de warm-up
 // post-relogin). Se inyecta desde afuera para evitar un ciclo de imports con warmup-throttle.ts,
@@ -23,9 +33,10 @@ export function enqueueSocketSend<T>(
 	task: () => Promise<T>,
 	opts?: { kind?: SendKind },
 ): Promise<T> {
-	queuedSendCount++;
-	const shouldWait = queuedSendCount > 1;
-	const chained = sendChainPromise.then(async () => {
+	const lane = lanes[opts?.kind === "reaction" ? "reaction" : "main"];
+	lane.count++;
+	const shouldWait = lane.count > 1;
+	const chained = lane.chain.then(async () => {
 		if (shouldWait) {
 			const multiplier = delayMultiplierProvider
 				? await delayMultiplierProvider().catch(() => 1)
@@ -34,13 +45,13 @@ export function enqueueSocketSend<T>(
 		}
 		return task();
 	});
-	sendChainPromise = chained.then(
+	lane.chain = chained.then(
 		() => undefined,
 		() => undefined,
 	);
 	chained
 		.finally(() => {
-			queuedSendCount--;
+			lane.count--;
 		})
 		// El propio `chained` ya se devuelve al llamador para que maneje el rechazo;
 		// esta rama derivada de `.finally()` solo existe para el efecto secundario del
@@ -51,5 +62,5 @@ export function enqueueSocketSend<T>(
 }
 
 export function getQueuedSendCount(): number {
-	return queuedSendCount;
+	return lanes.main.count + lanes.reaction.count;
 }

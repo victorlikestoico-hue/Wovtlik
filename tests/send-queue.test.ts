@@ -61,4 +61,31 @@ describe("send-queue", () => {
 		await Promise.all(tasks);
 		assert.ok(providerCalls >= 1, "second task queued behind another should query the multiplier");
 	});
+
+	it("does not make reactions wait behind a slow task in the main lane", async () => {
+		let releaseMain!: () => void;
+		const main = enqueueSocketSend(
+			() => new Promise<string>((resolve) => {
+				releaseMain = () => resolve("main");
+			}),
+		);
+		const reaction = await enqueueSocketSend(async () => "reaction", { kind: "reaction" });
+		assert.equal(reaction, "reaction");
+		assert.equal(getQueuedSendCount(), 1);
+		releaseMain();
+		assert.equal(await main, "main");
+		assert.equal(getQueuedSendCount(), 0);
+	});
+
+	it("still serializes reactions among themselves", async () => {
+		const order: number[] = [];
+		const tasks = [1, 2, 3].map((n) =>
+			enqueueSocketSend(async () => {
+				order.push(n);
+				return n;
+			}, { kind: "reaction" }),
+		);
+		await Promise.all(tasks);
+		assert.deepEqual(order, [1, 2, 3]);
+	});
 });

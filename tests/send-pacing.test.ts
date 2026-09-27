@@ -52,4 +52,9 @@ describe("send-pacing", () => {
 		const elapsed = Date.now() - start;
 		assert.ok(elapsed < 200, `expected near-instant resolution with multiplier 0, took ${elapsed}ms`);
 	});
+
+	it("never adds the long pause to reactions", () => {
+		const delay = withMockedRandom([0.99, 0], () => randomSendDelayMs("reaction"));
+		assert.ok(delay <= 2500, `expected short reaction delay, got ${delay}`);
+	});
 });

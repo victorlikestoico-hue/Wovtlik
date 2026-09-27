@@ -6,9 +6,13 @@
 // - reactive: respuesta a alguien que te acaba de escribir (una persona real también contesta rápido).
 // - cron: notificación/recordatorio que el bot inicia por su cuenta hacia un destinatario puntual.
 // - broadcast: mismo texto hacia muchos destinatarios distintos — el patrón de mayor riesgo, pacing más largo.
-export type SendKind = "reactive" | "cron" | "broadcast";
+// - reaction: reacción ✅ a un reporte del grupo de fallas. Reaccionar rápido a varios mensajes
+//   seguidos del mismo grupo es un patrón humano normal, así que va en su propio carril de la
+//   cola (ver send-queue.ts) con pausas cortas y sin la pausa larga de "se distrajo".
+export type SendKind = "reactive" | "cron" | "broadcast" | "reaction";
 
 const BASE_DELAY_MS: Record<SendKind, [number, number]> = {
+	reaction: [800, 2500],
 	reactive: [3000, 8000],
 	cron: [4000, 10000],
 	broadcast: [8000, 20000],
@@ -27,7 +31,7 @@ export function sleep(ms: number): Promise<void> {
 export function randomSendDelayMs(kind: SendKind = "reactive"): number {
 	const [min, max] = BASE_DELAY_MS[kind];
 	const base = min + Math.floor(Math.random() * (max - min));
-	if (Math.random() < LONG_PAUSE_CHANCE) {
+	if (kind !== "reaction" && Math.random() < LONG_PAUSE_CHANCE) {
 		const [lMin, lMax] = LONG_PAUSE_RANGE_MS;
 		return base + lMin + Math.floor(Math.random() * (lMax - lMin));
 	}

@@ -6,6 +6,7 @@ import {
 	Browsers,
 	downloadMediaMessage,
 	type AnyMessageContent,
+	type GroupMetadata,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import fs from "node:fs";
@@ -1629,15 +1630,18 @@ async function sendGroupTextWithPresence(jid: string, text: string, mentions?: s
 // agente hacía todo el trabajo real (offline encolado, ausencia corregida, reporte confirmado) pero
 // nunca veía el check — mismo síntoma visible que abortar el procesamiento entero. Reintenta un par
 // de veces espaciado a la duración típica de una reconexión antes de rendirse (y loguearlo, en vez
-// de tragarse el error en silencio).
+// de tragarse el error en silencio). Los reintentos cubren ~2 min: con varios reportes a la vez,
+// una reconexión o un rate-overlimit de WhatsApp duraba más que la ventana anterior (~21s) y el
+// ✅ de los reportes que venían detrás se perdía. Va por el carril "reaction" de la cola (ver
+// send-queue.ts) para no hacer fila detrás de respuestas de IA/crons.
 async function sendReportReaction(lastMsgKey: any, reportId: number): Promise<void> {
-	const delaysMs = [6000, 15000];
+	const delaysMs = [5000, 10000, 20000, 30000, 45000];
 	for (let attempt = 0; ; attempt++) {
 		try {
 			await sendViaGlobalSock(
 				lastMsgKey.remoteJid as string,
 				{ react: { text: "✅", key: lastMsgKey } },
-				{ kind: "reactive" },
+				{ kind: "reaction" },
 			);
 			return;
 		} catch (err) {
@@ -1966,7 +1970,14 @@ async function markTlReactionAndUpdateSheet(
 /** Detecta un mensaje del grupo de fallas y programa su procesamiento agregado por agente. */
 async function handleFallasGroupMessage(msg: any): Promise<void> {
 	const phone = resolveFallasGroupSenderPhone(msg);
-	if (!phone) return;
+	if (!phone) {
+		// Remitente @lid sin mapeo a número todavía — el reporte no se puede atribuir y se
+		// descarta. Se loguea para poder medir si esto explica reportes "ignorados".
+		console.warn(
+			`[fallas-group] Mensaje descartado: no se pudo resolver el número del remitente (participant=${msg.key?.participant ?? "?"}, pushName=${msg.pushName ?? "?"}).`,
+		);
+		return;
+	}
 
 	const senderName = (msg.pushName as string) || phone;
 
@@ -2476,6 +2487,43 @@ export let globalSock: ReturnType<typeof makeWASocket> | null = null;
 // globalSock puede ser no-null durante "connecting" o "qr", pero enviar en esos estados
 // produce mensajes en estado "cargando" permanente en el destinatario.
 let isSocketConnected = false;
+
+// Cache de metadata de grupos para Baileys (opción cachedGroupMetadata del socket). Sin esto,
+// CADA envío a un grupo (incluida cada reacción ✅ en el grupo de fallas) hace un query
+// groupMetadata a WhatsApp con todos los participantes antes de encriptar — lento en un grupo
+// grande y sujeto a rate-overlimit cuando varios agentes reportan a la vez. Se invalida con los
+// eventos groups.update / group-participants.update y además vence por TTL como red de seguridad.
+const GROUP_METADATA_TTL_MS = 10 * 60 * 1000;
+const groupMetadataCache = new Map<string, { data: GroupMetadata; fetchedAt: number }>();
+const groupMetadataInflight = new Map<string, Promise<GroupMetadata | undefined>>();
+
+async function getCachedGroupMetadata(jid: string): Promise<GroupMetadata | undefined> {
+	const cached = groupMetadataCache.get(jid);
+	if (cached && Date.now() - cached.fetchedAt < GROUP_METADATA_TTL_MS) return cached.data;
+	const sock = globalSock;
+	if (!sock) return cached?.data;
+	let inflight = groupMetadataInflight.get(jid);
+	if (!inflight) {
+		inflight = sock
+			.groupMetadata(jid)
+			.then((data) => {
+				groupMetadataCache.set(jid, { data, fetchedAt: Date.now() });
+				return data;
+			})
+			.catch((err) => {
+				console.error(`[bot] Error obteniendo metadata del grupo ${jid}:`, err);
+				// Si hay una versión vencida se usa igual; si no, undefined deja que Baileys
+				// haga su propio query como antes.
+				return cached?.data;
+			})
+			.finally(() => {
+				groupMetadataInflight.delete(jid);
+			});
+		groupMetadataInflight.set(jid, inflight);
+	}
+	return inflight;
+}
+
 let reconnectTimer: NodeJS.Timeout | null = null;
 let outboxInterval: NodeJS.Timeout | null = null;
 let profilePicInterval: NodeJS.Timeout | null = null;
@@ -3124,6 +3172,7 @@ export async function startWASocket() {
 		connectTimeoutMs: 60000,
 		defaultQueryTimeoutMs: 120000,
 		fireInitQueries: false,
+		cachedGroupMetadata: getCachedGroupMetadata,
 		getMessage: async (key) => {
 			if (key.id) {
 				const content = await getMessageContentByWhatsappId(key.id).catch(() => null);
@@ -3150,6 +3199,15 @@ export async function startWASocket() {
 	}
 
 	sock.ev.on("creds.update", saveCreds);
+
+	sock.ev.on("groups.update", (updates: Array<{ id?: string }>) => {
+		for (const update of updates) {
+			if (update.id) groupMetadataCache.delete(update.id);
+		}
+	});
+	sock.ev.on("group-participants.update", (update: { id: string }) => {
+		groupMetadataCache.delete(update.id);
+	});
 
 	// Baileys bufferea messages.upsert (y demás eventos) desde que conecta hasta que WhatsApp
 	// manda <ib><offline/></ib> ("terminé de entregar pendientes"). Incidente 2026-09-23: con
