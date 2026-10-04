@@ -1,5 +1,5 @@
 // Disparo manual puntual del recordatorio de firma de auditorías (sin esperar a la ventana
-// viernes/sábado/domingo del cron). Reusa la misma lógica de audit-signature-report-cron.ts.
+// sábado/domingo del cron). Reusa la misma lógica de audit-signature-report-cron.ts.
 //
 // No manda directo por globalSock: este script corre en un proceso Node aparte (via `railway
 // ssh`), que no comparte memoria con el bot-process real — su globalSock siempre está vacío acá.

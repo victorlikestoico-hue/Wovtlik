@@ -105,7 +105,7 @@ async function main() {
 	// Fraude - Información", al grupo "Fraude - información" (solo si está habilitado ahí).
 	startFraudeRotationCron();
 
-	// Recordatorio directo a cada agente (viernes/sábado/domingo, 9h Colombia) que no llegó al
+	// Recordatorio directo a cada agente (sábado/domingo, 9h Colombia) que no llegó al
 	// 100% de firma de sus auditorías esta semana (Monitor de Auditorías + BigQuery).
 	startAuditSignatureReportCron();
 

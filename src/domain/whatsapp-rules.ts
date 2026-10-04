@@ -51,6 +51,39 @@ export function decideOwnerKeywordAction(input: {
 	return "none";
 }
 
+// Frases con las que un agente avisa que no le llegan / no puede ver las respuestas del bot
+// (típicamente "Esperando el mensaje…" de WhatsApp cuando no puede descifrar lo que le
+// mandamos). Seguir respondiéndole solo agrega más mensajes que tampoco va a ver, así que en
+// ese caso el bot se calla. Se evalúa sobre el texto normalizado (minúsculas, sin tildes ni
+// puntuación). "los mensajes" a secas no cuenta si sigue "de …" ("no me llegan los mensajes
+// de los clientes" es otro problema, no de este chat).
+const CANNOT_SEE_REPLIES_PATTERNS: RegExp[] = [
+	/\bno me (llega|llegan|llego|llegaron|aparece|aparecen|carga|cargan|abre|abren) (tus|sus|las|tu|su) (mensajes?|respuestas?)\b/,
+	/\bno me (llega|llegan|llego|llegaron|aparece|aparecen|carga|cargan) (el|los) mensajes?\b(?! de )/,
+	/\bno me (llega|llegan|llego|llegaron) (nada|ninguna respuesta|ningun mensaje|la respuesta)\b(?! de )/,
+	/\bno (recibo|estoy recibiendo|he recibido|recibi) (tus|sus|los|las|ningun|ninguna|tu|su|el|la) (mensajes?|respuestas?)\b(?! de )/,
+	/\bno (puedo|logro|alcanzo a|me deja) (ver|leer|abrir) (tus|sus|los|las|tu|su|el|la) (mensajes?|respuestas?)\b(?! de )/,
+	/\bno (veo|se ve|se ven) (tus|sus|los|las|tu|su|el|la) (mensajes?|respuestas?)\b(?! de )/,
+	/\bno (puedo |logro |alcanzo a )?(ver|veo|leer|leo|abrir) lo que (me )?(respond|escrib|mand|envi|dic|contest)/,
+	/\besperando (el|este|un|los|estos) mensajes?\b/,
+	/\bmensajes? (en blanco|vacios?|bloqueados?|cifrados?)\b/,
+];
+
+function normalizeForMatching(text: string): string {
+	return text
+		.normalize("NFD")
+		.replace(/[̀-ͯ]/g, "")
+		.toLocaleLowerCase()
+		.replace(/[^a-z0-9ñ]+/g, " ")
+		.trim();
+}
+
+export function isCannotSeeRepliesMessage(text: string): boolean {
+	const normalized = normalizeForMatching(text);
+	if (!normalized || normalized.includes("correo")) return false;
+	return CANNOT_SEE_REPLIES_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 export function getTurnFinalizationCleanup(conversationId: string | number) {
 	const id = String(conversationId);
 	return {

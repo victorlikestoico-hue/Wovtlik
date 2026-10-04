@@ -19,10 +19,10 @@ const AUDIT_DATASET = "web-dinamica-429617.auditorias_pedidosya";
 const AGENTS_SHEET_ID = "14EHBTNksNanil6pxmcbjkjTispLA6Fjn6dPzRzXmaQc";
 const AGENTS_SHEET_GID = "390261573";
 
-// Se envía viernes, sábado y domingo (getDay(): 0=domingo … 6=sábado), a las 9h Colombia,
+// Se envía solo sábado y domingo (getDay(): 0=domingo … 6=sábado), a las 9h Colombia,
 // con margen de recuperación hasta las 11h si el bot estaba caído — mismo patrón que
 // form-broadcast-cron.ts.
-const SEND_WEEKDAYS = [5, 6, 0];
+const SEND_WEEKDAYS = [6, 0];
 const SEND_HOUR_START = 9;
 const SEND_HOUR_END = 11;
 
@@ -72,6 +72,19 @@ export async function fetchUnsignedAgents(
 		WHERE c.rol_auditor = 'TL'
 			AND LOWER(TRIM(c.auditor_email)) = @auditorEmail
 			AND DATE(c.fecha, '${COLOMBIA_TZ}') BETWEEN @weekStart AND @today
+			-- Agentes que el TL sacó de su equipo ("Mi Equipo" → "Marcar baja" en el Monitor
+			-- de Auditorías, ver markAgentBaja en apps_script/Code.js): sus auditorías de la
+			-- semana siguen en consolidado, así que sin este filtro les seguía llegando el
+			-- recordatorio. Última fila por agente gana; fecha_baja NULL = reactivado.
+			AND LOWER(TRIM(c.agent_email)) NOT IN (
+				SELECT agent_email FROM (
+					SELECT LOWER(TRIM(agent_email)) AS agent_email, fecha_baja,
+						ROW_NUMBER() OVER (PARTITION BY LOWER(TRIM(agent_email)) ORDER BY marcado_en DESC) AS rn
+					FROM \`${AUDIT_DATASET}.agentes_baja\`
+					WHERE agent_email IS NOT NULL
+				)
+				WHERE rn = 1 AND fecha_baja IS NOT NULL AND fecha_baja <= @today
+			)
 		GROUP BY agent
 		`,
 		[
@@ -178,7 +191,7 @@ export async function runAuditSignatureReportOnce(): Promise<
 }
 
 export function startAuditSignatureReportCron(): void {
-	console.log("[audit-signature-report] Iniciando recordatorio de firma de auditorías (viernes, sábado y domingo, 9h Colombia)...");
+	console.log("[audit-signature-report] Iniciando recordatorio de firma de auditorías (sábado y domingo, 9h Colombia)...");
 	const tick = async () => {
 		const result = await runAuditSignatureReportOnce();
 		if (result !== "outside_window") {

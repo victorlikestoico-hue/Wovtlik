@@ -1,5 +1,6 @@
 import {
 	decideOwnerKeywordAction,
+	isCannotSeeRepliesMessage,
 	parseNormalReply,
 	planHandoffActions,
 	type AutomationSettings,
@@ -172,7 +173,8 @@ export interface MessageProcessResult {
 		| "human_mode_stored"
 		| "ai_replied"
 		| "ai_invalid_json"
-		| "ai_handoff";
+		| "ai_handoff"
+		| "agent_cannot_see_replies";
 	conversationId?: number;
 	cleanup?: CleanupResult;
 }
@@ -564,6 +566,34 @@ export function createInboundHandler(deps: InboundHandlerDeps) {
 					status: "human_mode_stored",
 					conversationId: beforeConversation.id,
 				});
+
+			// Si el agente avisa que no le llegan / no puede ver nuestras respuestas, no tiene
+			// sentido seguir mandándole mensajes que tampoco va a ver: pasamos la conversación a
+			// HUMAN (el bot deja de responderle hasta que el dueño lo reactive) y avisamos por
+			// Telegram para que alguien lo contacte por otro medio.
+			if (isCannotSeeRepliesMessage(text)) {
+				const reason = "agent_cannot_see_replies";
+				await deps.repo.setMode(beforeConversation.id, "HUMAN", {
+					reason,
+					changedBy: "assistant",
+					changedAt: now,
+					eventType: "handoff_to_human",
+					metadata: { content: text, notifyTelegram: true },
+				});
+				await deps.notifyTelegramHumanNeeded({
+					conversationId: beforeConversation.id,
+					phone,
+					jid: chatJid,
+					reason,
+					lastMessage: text,
+				}).catch((error) => {
+					console.warn("[bot] No se pudo avisar por Telegram (agente no ve respuestas):", error);
+				});
+				return done({
+					status: "agent_cannot_see_replies",
+					conversationId: beforeConversation.id,
+				});
+			}
 
 			const queueItem: QueuedTurnMessage = {
 				messageId: whatsappMessageId ?? `db-${inboundMessage.id}`,
