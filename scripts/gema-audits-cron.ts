@@ -12,7 +12,8 @@ const redisClient = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 // agente: CR3, Link, Auditor, Comentarios. La service account (GOOGLE_SA_EMAIL) necesita acceso
 // de lectura a esta planilla.
 const GEMA_SHEET_ID = "1mkEmSRXQJlF4SwFBkxLmy2ASGM8mWwxCRZTFCPD5Ybs";
-const GEMA_SHEET_GID = "403349622";
+// Ojo: 403349622 es "Apego Gema" (resumen por agente) en la misma planilla, no esta hoja.
+const GEMA_SHEET_GID = "1414354841";
 
 const TICK_MS = 15 * 60 * 1000;
 const NOT_READY_RETRY_MS = 30_000;
@@ -43,10 +44,19 @@ export async function fetchGemaAudits(): Promise<GemaAudit[]> {
 	const linkCol = col(/^link$/i);
 	const auditorCol = col(/^auditor$/i);
 	const comentCol = col(/^comentarios?$/i);
+	const weekCol = col(/^week\s*audit$/i);
 	if (agentCol < 0 || contactCol < 0) {
 		throw new Error("La hoja 'Audits Foco Gema' no tiene columnas 'Agent'/'contact_id'");
 	}
 	const cell = (cells: string[], i: number) => (i >= 0 ? (cells[i] ?? "").trim() : "");
+	// En las filas más nuevas los auditores escriben el comentario en "Week audit" y dejan
+	// "Comentarios" vacía; se usa ese texto salvo que sea el número de semana (ej. "40").
+	const comentariosOf = (cells: string[]) => {
+		const c = cell(cells, comentCol);
+		if (c) return c;
+		const w = cell(cells, weekCol);
+		return /^\d{1,2}$/.test(w) ? "" : w;
+	};
 
 	const audits: GemaAudit[] = [];
 	for (const { cells } of rows) {
@@ -59,7 +69,7 @@ export async function fetchGemaAudits(): Promise<GemaAudit[]> {
 			cr3: cell(cells, cr3Col),
 			link: cell(cells, linkCol),
 			auditor: cell(cells, auditorCol),
-			comentarios: cell(cells, comentCol),
+			comentarios: comentariosOf(cells),
 		});
 	}
 	return audits;
