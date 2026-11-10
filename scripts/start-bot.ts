@@ -25,6 +25,7 @@ import { startTlNoAnnouncedReportCron } from "./tl-no-announced-report-cron.ts";
 import { startReactivateConversationsCron } from "./reactivate-conversations-cron.ts";
 import { startFraudeRotationCron } from "./fraude-rotation-cron.ts";
 import { startAuditSignatureReportCron } from "./audit-signature-report-cron.ts";
+import { startGemaAuditsCron } from "./gema-audits-cron.ts";
 
 const restartFlagPath = getDestructiveRestartFlagPath();
 const softRestartFlagPath = getSoftRestartFlagPath();
@@ -108,6 +109,10 @@ async function main() {
 	// Recordatorio directo a cada agente (sábado/domingo, 9h Colombia) que no llegó al
 	// 100% de firma de sus auditorías esta semana (Monitor de Auditorías + BigQuery).
 	startAuditSignatureReportCron();
+
+	// Aviso por WhatsApp + correo a cada agente con auditorías nuevas en la hoja
+	// "Audits Foco Gema" (cada 15 min, agrupado por agente).
+	startGemaAuditsCron();
 
 	const heartbeat = startHangWatchdog();
 

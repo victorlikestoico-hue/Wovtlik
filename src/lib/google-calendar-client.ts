@@ -5,7 +5,9 @@
 
 let _token: { value: string; expiresAt: number; refreshTokenUsed: string } | null = null;
 
-async function getAccessToken(refreshToken: string): Promise<string> {
+// Exportado para gmail-client.ts: mismo refresh_token (un solo consentimiento con scopes
+// calendar + gmail.send, ver /api/google-oauth/start), así que comparten el cache del access token.
+export async function getAccessToken(refreshToken: string): Promise<string> {
 	if (
 		_token &&
 		_token.refreshTokenUsed === refreshToken &&

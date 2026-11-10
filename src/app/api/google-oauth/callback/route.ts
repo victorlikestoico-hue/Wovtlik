@@ -71,7 +71,7 @@ export async function GET(req: Request) {
 
 		const response = NextResponse.json({
 			ok: true,
-			message: "Google Calendar conectado correctamente. Ya podés cerrar esta pestaña.",
+			message: "Google Calendar y Gmail conectados correctamente. Ya podés cerrar esta pestaña.",
 		});
 		response.cookies.set("google_oauth_state", "", { path: "/", maxAge: 0 });
 		return response;
