@@ -25,6 +25,15 @@ const NOTIFIED_MAIL_KEY = "bot:gema_audits:notified_mail";
 // Primer arranque: todo lo que ya está en la hoja se marca como visto sin avisar (decisión del
 // usuario, para no mandar el histórico de golpe).
 const INITIALIZED_KEY = "bot:gema_audits:initialized";
+// Los auditores cargan muchos tickets de antemano (con Auditor ya asignado) y auditan solo
+// algunos: una fila cuenta como auditoría recién cuando "¿Se apega al SOP?" tiene valor. El
+// primer arranque (versión anterior) marcó como vistas también las filas sin auditar; esta
+// migración única las saca de los sets para que se avisen cuando efectivamente se auditen.
+const MIGRATED_AUDITED_ONLY_KEY = "bot:gema_audits:migrated_audited_only";
+// Firma (resultado + comentario) de cada fila auditada todavía sin avisar, vista en el tick
+// anterior: si una fila auditada aún no tiene comentario, se espera a que no cambie entre dos
+// lecturas para no mandarle al agente una auditoría a medio cargar.
+const PENDING_SIG_KEY = "bot:gema_audits:pending_sig";
 
 interface GemaAudit {
 	contactId: string;
@@ -33,6 +42,8 @@ interface GemaAudit {
 	link: string;
 	auditor: string;
 	comentarios: string;
+	audited: boolean;
+	signature: string;
 }
 
 export async function fetchGemaAudits(): Promise<GemaAudit[]> {
@@ -45,8 +56,11 @@ export async function fetchGemaAudits(): Promise<GemaAudit[]> {
 	const auditorCol = col(/^auditor$/i);
 	const comentCol = col(/^comentarios?$/i);
 	const weekCol = col(/^week\s*audit$/i);
-	if (agentCol < 0 || contactCol < 0) {
-		throw new Error("La hoja 'Audits Foco Gema' no tiene columnas 'Agent'/'contact_id'");
+	const sopCol = col(/apega al sop/i);
+	const gemaCol = col(/utiliza bien la gema/i);
+	const wlCol = col(/realiza wl/i);
+	if (agentCol < 0 || contactCol < 0 || sopCol < 0) {
+		throw new Error("La hoja 'Audits Foco Gema' no tiene columnas 'Agent'/'contact_id'/'¿Se apega al SOP?'");
 	}
 	const cell = (cells: string[], i: number) => (i >= 0 ? (cells[i] ?? "").trim() : "");
 	// En las filas más nuevas los auditores escriben el comentario en "Week audit" y dejan
@@ -63,13 +77,18 @@ export async function fetchGemaAudits(): Promise<GemaAudit[]> {
 		const contactId = cell(cells, contactCol);
 		const agent = cell(cells, agentCol).toLowerCase();
 		if (!contactId || !agent.includes("@")) continue;
+		const sop = cell(cells, sopCol);
+		const auditor = cell(cells, auditorCol);
+		const comentarios = comentariosOf(cells);
 		audits.push({
 			contactId,
 			agent,
 			cr3: cell(cells, cr3Col),
 			link: cell(cells, linkCol),
-			auditor: cell(cells, auditorCol),
-			comentarios: comentariosOf(cells),
+			auditor,
+			comentarios,
+			audited: sop !== "",
+			signature: [sop, cell(cells, gemaCol), cell(cells, wlCol), auditor, comentarios].join("\u0001"),
 		});
 	}
 	return audits;
@@ -124,31 +143,58 @@ ${rows}
 
 export async function runGemaAuditsOnce(): Promise<"initialized" | "no_new" | "sent" | "not_ready" | "error"> {
 	try {
-		const audits = await fetchGemaAudits();
+		const allRows = await fetchGemaAudits();
+		// Solo filas efectivamente auditadas; si un contact_id aparece repetido, gana la primera
+		// fila auditada (las filas sin auditar del mismo ticket se ignoran).
+		const auditedIds = new Set<string>();
+		const audits = allRows.filter((a) => {
+			if (!a.audited || auditedIds.has(a.contactId)) return false;
+			auditedIds.add(a.contactId);
+			return true;
+		});
 
 		if (!(await redisClient.get(INITIALIZED_KEY))) {
-			const ids = [...new Set(audits.map((a) => a.contactId))];
+			const ids = [...auditedIds];
 			if (ids.length > 0) {
 				await redisClient.sadd(NOTIFIED_WA_KEY, ...ids);
 				await redisClient.sadd(NOTIFIED_MAIL_KEY, ...ids);
 			}
 			await redisClient.set(INITIALIZED_KEY, Date.now().toString());
+			await redisClient.set(MIGRATED_AUDITED_ONLY_KEY, Date.now().toString());
 			console.log(`[gema-audits] Primer arranque: ${ids.length} auditoría(s) existentes marcadas como vistas.`);
 			return "initialized";
 		}
 
-		const [notifiedWa, notifiedMail] = await Promise.all([
+		if (!(await redisClient.get(MIGRATED_AUDITED_ONLY_KEY))) {
+			const notAudited = [...new Set(allRows.map((a) => a.contactId))].filter((id) => !auditedIds.has(id));
+			if (notAudited.length > 0) {
+				await redisClient.srem(NOTIFIED_WA_KEY, ...notAudited);
+				await redisClient.srem(NOTIFIED_MAIL_KEY, ...notAudited);
+			}
+			await redisClient.set(MIGRATED_AUDITED_ONLY_KEY, Date.now().toString());
+			console.log(`[gema-audits] Migración: ${notAudited.length} ticket(s) sin auditar quitados de "ya avisados".`);
+		}
+
+		const [notifiedWa, notifiedMail, prevSigs] = await Promise.all([
 			redisClient.smembers(NOTIFIED_WA_KEY).then((m) => new Set(m)),
 			redisClient.smembers(NOTIFIED_MAIL_KEY).then((m) => new Set(m)),
+			redisClient.hgetall(PENDING_SIG_KEY),
 		]);
 
-		// Dedupe por contact_id dentro de la misma lectura (fila duplicada en la hoja).
-		const seen = new Set<string>();
-		const pending = audits.filter((a) => {
-			if (seen.has(a.contactId)) return false;
-			seen.add(a.contactId);
-			return !notifiedWa.has(a.contactId) || !notifiedMail.has(a.contactId);
-		});
+		const unnotified = audits.filter((a) => !notifiedWa.has(a.contactId) || !notifiedMail.has(a.contactId));
+		// Lista para avisar si ya tiene comentario o si no cambió desde la lectura anterior (el
+		// auditor terminó de cargarla). Las demás se anotan y se reevalúan en el próximo tick.
+		const pending = unnotified.filter((a) => a.comentarios !== "" || prevSigs[a.contactId] === a.signature);
+		const waiting = unnotified.filter((a) => !pending.includes(a));
+		const sigUpdate: Record<string, string> = {};
+		for (const a of waiting) sigUpdate[a.contactId] = a.signature;
+		// Firmas de contact_id que ya no esperan (avisados o que dejaron de estar auditados).
+		const staleSigs = Object.keys(prevSigs).filter((id) => !waiting.some((a) => a.contactId === id));
+		if (staleSigs.length > 0) await redisClient.hdel(PENDING_SIG_KEY, ...staleSigs);
+		if (waiting.length > 0) {
+			await redisClient.hset(PENDING_SIG_KEY, sigUpdate);
+			console.log(`[gema-audits] ${waiting.length} auditoría(s) sin comentario, esperando a que no cambien: ${waiting.map((a) => a.contactId).join(", ")}`);
+		}
 		if (pending.length === 0) return "no_new";
 
 		const { globalSock, sendViaGlobalSock } = await import("../src/lib/baileys/client.ts");
