@@ -5,8 +5,10 @@ import {
 	fetchLatestBaileysVersion,
 	Browsers,
 	downloadMediaMessage,
+	proto,
 	type AnyMessageContent,
 	type GroupMetadata,
+	type WAMessage,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import fs from "node:fs";
@@ -2559,6 +2561,47 @@ export { enqueueSocketSend, getQueuedSendCount };
 // Único punto de contacto real con globalSock.sendMessage. Todo envío saliente (respuestas
 // reactivas de IA, outbox, crons, grupo de fallas) debe pasar por acá para quedar serializado
 // y paceado por la cola global — nunca llamar a globalSock.sendMessage directamente en otro lado.
+// Cache de mensajes enviados para responder los "retry receipts": cuando el teléfono del
+// destinatario no puede descifrar un mensaje (sesión Signal desincronizada, dispositivo nuevo,
+// etc.) le pide al bot que lo reenvíe, y Baileys llama a getMessage(key) para obtener el
+// contenido original. Si no lo encuentra ignora el pedido y el destinatario queda para siempre en
+// "Esperando el mensaje. Esto puede demorar un poco." — que es lo que pasaba antes: los envíos de
+// los crons no se guardaban en ningún lado y las respuestas de la IA se guardan en `messages` sin
+// whatsapp_message_id. Va a Redis (no solo memoria) porque el pedido puede llegar horas después,
+// cuando el agente prende el teléfono, y para entonces puede haber habido un redeploy.
+const SENT_MSG_TTL_S = 7 * 24 * 60 * 60;
+const SENT_MSG_MEMORY_MAX = 500;
+const sentMessagesMemory = new Map<string, proto.IMessage>();
+const sentMsgRedisKey = (id: string) => `bot:sent_msg:${id}`;
+
+async function rememberSentMessage(sent: WAMessage | undefined): Promise<void> {
+	const id = sent?.key?.id;
+	if (!id || !sent?.message) return;
+	sentMessagesMemory.set(id, sent.message);
+	if (sentMessagesMemory.size > SENT_MSG_MEMORY_MAX) {
+		const oldest = sentMessagesMemory.keys().next().value;
+		if (oldest) sentMessagesMemory.delete(oldest);
+	}
+	try {
+		const encoded = Buffer.from(proto.Message.encode(sent.message).finish()).toString("base64");
+		await redisClient.set(sentMsgRedisKey(id), encoded, "EX", SENT_MSG_TTL_S);
+	} catch (err) {
+		console.warn(`[bot] No se pudo cachear el mensaje enviado ${id} para reintentos:`, err);
+	}
+}
+
+async function getSentMessage(id: string): Promise<proto.IMessage | undefined> {
+	const cached = sentMessagesMemory.get(id);
+	if (cached) return cached;
+	try {
+		const encoded = await redisClient.get(sentMsgRedisKey(id));
+		if (encoded) return proto.Message.decode(Buffer.from(encoded, "base64"));
+	} catch (err) {
+		console.warn(`[bot] No se pudo leer de Redis el mensaje ${id} para reintento:`, err);
+	}
+	return undefined;
+}
+
 export async function sendViaGlobalSock(
 	jid: string,
 	content: AnyMessageContent,
@@ -2566,7 +2609,8 @@ export async function sendViaGlobalSock(
 ): Promise<void> {
 	await enqueueSocketSend(async () => {
 		if (globalSock && isSocketConnected) {
-			await globalSock.sendMessage(jid, content);
+			const sent = await globalSock.sendMessage(jid, content);
+			await rememberSentMessage(sent);
 		} else {
 			throw new Error("[bot] Socket no conectado o no listo. No se puede enviar mensaje.");
 		}
@@ -3197,11 +3241,19 @@ export async function startWASocket() {
 		defaultQueryTimeoutMs: 120000,
 		fireInitQueries: false,
 		cachedGroupMetadata: getCachedGroupMetadata,
+		// Baileys lo usa para reenviar un mensaje cuando el destinatario no lo pudo descifrar
+		// (ver rememberSentMessage). Primero el mensaje completo cacheado al enviarlo; la tabla
+		// messages queda como respaldo (solo texto).
 		getMessage: async (key) => {
-			if (key.id) {
-				const content = await getMessageContentByWhatsappId(key.id).catch(() => null);
-				if (content) return { conversation: content };
+			if (!key.id) return undefined;
+			const sent = await getSentMessage(key.id);
+			if (sent) {
+				console.log(`[bot] Reenvío solicitado por ${key.remoteJid} para ${key.id}: reenviando.`);
+				return sent;
 			}
+			const content = await getMessageContentByWhatsappId(key.id).catch(() => null);
+			if (content) return { conversation: content };
+			console.warn(`[bot] Reenvío solicitado por ${key.remoteJid} para ${key.id}, pero el mensaje no está en caché.`);
 			return undefined;
 		},
 	});
