@@ -1,7 +1,7 @@
 import "./env-loader.ts";
 import { Redis } from "ioredis";
 import { readSheetByGid } from "../src/lib/sheets-client.ts";
-import { getSettings } from "../src/lib/db.ts";
+import { getSettings, notifyGemaAuditSent } from "../src/lib/db.ts";
 import { sendGmail, GmailNotConfiguredError } from "../src/lib/gmail-client.ts";
 import { lookupAgentContacts } from "./audit-signature-report-cron.ts";
 
@@ -176,6 +176,10 @@ export async function runGemaAuditsOnce(): Promise<"initialized" | "no_new" | "s
 		for (const [agent, list] of byAgent) {
 			const contact = contacts.get(agent);
 			const firstName = contact?.firstName ?? "";
+			// Resultado de cada canal en este tick, para el resumen por Telegram. Si un canal ya
+			// había salido en un tick anterior (reintento solo del otro canal) se indica así.
+			let waStatus = "Ya enviado antes";
+			let mailStatus = "Ya enviado antes";
 
 			const waList = list.filter((a) => !notifiedWa.has(a.contactId));
 			if (waList.length > 0) {
@@ -185,6 +189,7 @@ export async function runGemaAuditsOnce(): Promise<"initialized" | "no_new" | "s
 					// repetir el warning cada 15 min (el correo sigue su propio curso).
 					console.warn(`[gema-audits] Sin teléfono para ${agent} en la planilla Base, se omite el WhatsApp.`);
 					await redisClient.sadd(NOTIFIED_WA_KEY, ...waIds);
+					waStatus = "⚠️ No enviado: el agente no tiene teléfono en la planilla Base";
 				} else {
 					try {
 						await sendViaGlobalSock(
@@ -194,32 +199,53 @@ export async function runGemaAuditsOnce(): Promise<"initialized" | "no_new" | "s
 						);
 						await redisClient.sadd(NOTIFIED_WA_KEY, ...waIds);
 						console.log(`[gema-audits] WhatsApp enviado a ${agent} (${contact.phone}): ${waIds.join(", ")}`);
+						waStatus = "✅ Enviado";
 					} catch (err) {
 						console.error(`[gema-audits] Falló el WhatsApp a ${agent} (${contact.phone}):`, err);
+						waStatus = `❌ Falló (se reintenta en 15 min): ${String((err as Error)?.message ?? err).slice(0, 150)}`;
 					}
 				}
 			}
 
 			const mailList = list.filter((a) => !notifiedMail.has(a.contactId));
-			if (mailList.length > 0 && !mailDisabledReason) {
-				try {
-					await sendGmail({
-						to: agent,
-						subject: `Tienes ${mailList.length} ${plural(mailList.length)} de Foco Gema`,
-						html: buildEmailHtml(firstName, mailList),
-						refreshToken,
-					});
-					await redisClient.sadd(NOTIFIED_MAIL_KEY, ...mailList.map((a) => a.contactId));
-					console.log(`[gema-audits] Correo enviado a ${agent}: ${mailList.map((a) => a.contactId).join(", ")}`);
-				} catch (err) {
-					if (err instanceof GmailNotConfiguredError) {
-						// No se marcan como enviados: cuando se autorice Gmail salen en el próximo tick.
-						mailDisabledReason = err.message;
-					} else {
-						console.error(`[gema-audits] Falló el correo a ${agent}:`, err);
+			if (mailList.length > 0) {
+				if (mailDisabledReason) {
+					mailStatus = `⏳ Pendiente: ${mailDisabledReason}`;
+				} else {
+					try {
+						await sendGmail({
+							to: agent,
+							subject: `Tienes ${mailList.length} ${plural(mailList.length)} de Foco Gema`,
+							html: buildEmailHtml(firstName, mailList),
+							refreshToken,
+						});
+						await redisClient.sadd(NOTIFIED_MAIL_KEY, ...mailList.map((a) => a.contactId));
+						console.log(`[gema-audits] Correo enviado a ${agent}: ${mailList.map((a) => a.contactId).join(", ")}`);
+						mailStatus = "✅ Enviado";
+					} catch (err) {
+						if (err instanceof GmailNotConfiguredError) {
+							// No se marcan como enviados: cuando se autorice Gmail salen en el próximo tick.
+							mailDisabledReason = err.message;
+							mailStatus = `⏳ Pendiente: ${err.message}`;
+						} else {
+							console.error(`[gema-audits] Falló el correo a ${agent}:`, err);
+							mailStatus = `❌ Falló (se reintenta en 15 min): ${String((err as Error)?.message ?? err).slice(0, 150)}`;
+						}
 					}
 				}
 			}
+
+			// Un aviso a Telegram por agente con todo lo que se le mandó y el resultado de cada canal.
+			// Si en este tick solo quedaba el correo pendiente y siguió pendiente (Gmail sin autorizar),
+			// no se repite el aviso cada 15 min: ya se avisó en el tick en que salió el WhatsApp.
+			if (waStatus === "Ya enviado antes" && mailStatus.startsWith("⏳")) continue;
+			await notifyGemaAuditSent({
+				agentEmail: agent,
+				agentPhone: contact?.phone ?? null,
+				audits: list,
+				whatsappStatus: waStatus,
+				emailStatus: mailStatus,
+			}).catch((err) => console.error(`[gema-audits] Falló el aviso a Telegram para ${agent}:`, err));
 		}
 
 		if (mailDisabledReason) {

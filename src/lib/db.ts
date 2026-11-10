@@ -933,6 +933,18 @@ export async function notifyTlDailyMissedAnnouncements(input: {
 	logIfTelegramNotificationFailed("notifyTlDailyMissedAnnouncements", result);
 }
 
+export async function notifyGemaAuditSent(
+	input: Parameters<ReturnType<typeof createTelegramNotifier>["notifyGemaAuditSent"]>[0],
+): Promise<void> {
+	const notifier = createTelegramNotifier({
+		botToken: process.env.TELEGRAM_BOT_TOKEN,
+		chatId: process.env.TELEGRAM_CHAT_ID,
+		fetch: globalThis.fetch as any,
+	});
+	const result = await notifier.notifyGemaAuditSent(input);
+	logIfTelegramNotificationFailed("notifyGemaAuditSent", result);
+}
+
 // ── TL Announcements (historial persistente de "los acompaño con..." en el grupo de
 // desconexiones — ver tl-no-announced-report-cron.ts) ───────────────────────────────
 

@@ -256,6 +256,45 @@ export function formatTlDailyMissedAnnouncementsNotification(
 	return lines.join("\n");
 }
 
+export interface GemaAuditSentNotificationInput {
+	agentEmail: string;
+	agentPhone: string | null;
+	audits: Array<{ contactId: string; cr3: string; link: string; auditor: string; comentarios: string }>;
+	// Texto ya armado del resultado de cada canal (ej. "✅ Enviado", "❌ Falló: …").
+	whatsappStatus: string;
+	emailStatus: string;
+}
+
+const TELEGRAM_MAX_CHARS = 4000; // límite de Telegram: 4096
+
+export function formatGemaAuditSentNotification(input: GemaAuditSentNotificationInput): string {
+	const header = [
+		`📝 <b>Auditoría${input.audits.length === 1 ? "" : "s"} Foco Gema enviada${input.audits.length === 1 ? "" : "s"} al agente</b>`,
+		`Agente: ${escapeHtml(input.agentEmail)}${input.agentPhone ? ` (${escapeHtml(input.agentPhone)})` : ""}`,
+		`WhatsApp: ${escapeHtml(input.whatsappStatus)}`,
+		`Correo: ${escapeHtml(input.emailStatus)}`,
+	];
+	const blocks = input.audits.map((a, i) =>
+		[
+			"",
+			`<b>${i + 1}.</b> contact_id: <code>${escapeHtml(a.contactId)}</code>`,
+			`CR3: ${escapeHtml(a.cr3 || "-")}`,
+			`Auditor: ${escapeHtml(a.auditor || "-")}`,
+			`Comentarios: ${escapeHtml(a.comentarios || "-")}`,
+			`Link: ${escapeHtml(a.link || "-")}`,
+		].join("\n"),
+	);
+	let text = header.join("\n");
+	for (const [i, block] of blocks.entries()) {
+		if (text.length + block.length > TELEGRAM_MAX_CHARS) {
+			text += `\n\n… y ${blocks.length - i} auditoría(s) más (ver logs).`;
+			break;
+		}
+		text += `\n${block}`;
+	}
+	return text;
+}
+
 export function createTelegramNotifier(config: TelegramNotifierConfig) {
 	// chatId admite varios destinatarios separados por coma (ej. "6685838889,8945487677")
 	// para que un mismo bot le avise a más de una persona sin duplicar la config por caller.
@@ -339,6 +378,9 @@ export function createTelegramNotifier(config: TelegramNotifierConfig) {
 		},
 		notifyTlDailyMissedAnnouncements(input: TlDailyMissedAnnouncementsNotificationInput) {
 			return sendText(formatTlDailyMissedAnnouncementsNotification(input));
+		},
+		notifyGemaAuditSent(input: GemaAuditSentNotificationInput) {
+			return sendText(formatGemaAuditSentNotification(input));
 		},
 	};
 }
