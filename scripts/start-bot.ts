@@ -2,7 +2,7 @@
 import "./env-loader.ts";
 import fs from "node:fs";
 import { Worker } from "node:worker_threads";
-import { startWASocket, shutdownWASocket, listAllGroups, sendViaGlobalSock } from "../src/lib/baileys/client.ts";
+import { startWASocket, shutdownWASocket, listAllGroups, sendViaGlobalSock, SUPERVISOR_MODE_ENABLED } from "../src/lib/baileys/client.ts";
 import {
 	getDestructiveRestartFlagPath,
 	getSoftRestartFlagPath,
@@ -65,11 +65,17 @@ async function main() {
 	// Follow-ups automáticos DESACTIVADOS: no mandar más recordatorios a los
 	// agentes horas después de una conversación cuando no responden.
 
-	// Reportes automáticos de DashBig por WhatsApp
-	startDashBigReportsCron();
-
 	// Recordatorios de citas agendadas (cliente, agente y Telegram)
 	startAppointmentsCron();
+
+	// Reactivación diaria a las 05:00 UY del modo IA en todas las conversaciones (archivadas y no
+	// archivadas), equivalente a apretar el botón "Activar IA" del dashboard todas las noches.
+	startReactivateConversationsCron();
+
+	// Todo lo de abajo es trabajo de supervisor/TL: desactivado salvo SUPERVISOR_MODE_ENABLED=true.
+	if (SUPERVISOR_MODE_ENABLED) {
+	// Reportes automáticos de DashBig por WhatsApp
+	startDashBigReportsCron();
 
 	// Recordatorio cada 4hs en el grupo de fallas de qué datos enviar (correo, motivo, LOB).
 	// Se omite si este bot es un miembro secundario del grupo (FALLAS_GROUP_SEND_ONLY) para no
@@ -98,10 +104,6 @@ async function main() {
 	// en el grupo de desconexiones el día anterior
 	startTlNoAnnouncedReportCron();
 
-	// Reactivación diaria a las 05:00 UY del modo IA en todas las conversaciones (archivadas y no
-	// archivadas), equivalente a apretar el botón "Activar IA" del dashboard todas las noches.
-	startReactivateConversationsCron();
-
 	// Rotación cada 2hs de los archivos/mensajes cargados en Ajustes → "Archivos para el Grupo
 	// Fraude - Información", al grupo "Fraude - información" (solo si está habilitado ahí).
 	startFraudeRotationCron();
@@ -113,6 +115,9 @@ async function main() {
 	// Aviso por WhatsApp + correo a cada agente con auditorías nuevas en la hoja
 	// "Audits Foco Gema" (cada 15 min, agrupado por agente).
 	startGemaAuditsCron();
+	} else {
+		console.log("[bot-process] Modo supervisor/TL desactivado: solo asistente Vtlik (sin crons de agentes/TL).");
+	}
 
 	const heartbeat = startHangWatchdog();
 

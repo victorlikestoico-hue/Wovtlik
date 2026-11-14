@@ -99,6 +99,12 @@ for (const dir of [authDir, dataDir]) {
 
 // ── DashBig intent helpers ───────────────────────────────────────────────────
 
+// Modo supervisor/TL DESACTIVADO por defecto: el bot solo atiende como asistente de Vtlik.
+// Apaga las respuestas automáticas a agentes (métricas, turnos, ausencias, offline, horas extra,
+// registro de correo, menú, lookup de casos), el procesamiento del grupo de fallas y la caché de
+// respuestas. Para reactivar: SUPERVISOR_MODE_ENABLED=true en .env y reiniciar el bot.
+export const SUPERVISOR_MODE_ENABLED = process.env.SUPERVISOR_MODE_ENABLED === "true";
+
 const UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const EMAIL_REGEX = /[\w.+%-]+@[\w-]+\.[\w.]+/;
 // Correo con el dominio cortado o incompleto ("nombre.apellido_ndo.ext@pedidos",
@@ -1643,6 +1649,9 @@ async function sendGroupTextWithPresence(jid: string, text: string, mentions?: s
 // ✅ de los reportes que venían detrás se perdía. Va por el carril "reaction" de la cola (ver
 // send-queue.ts) para no hacer fila detrás de respuestas de IA/crons.
 async function sendReportReaction(lastMsgKey: any, reportId: number): Promise<void> {
+	// Reacciones desactivadas: el bot ya no reacciona ✅ a los reportes. Para reactivarlas,
+	// poner FALLAS_REACTION_ENABLED=true en .env y reiniciar el bot.
+	if (process.env.FALLAS_REACTION_ENABLED !== "true") return;
 	const delaysMs = [5000, 10000, 20000, 30000, 45000];
 	for (let attempt = 0; ; attempt++) {
 		try {
@@ -2674,9 +2683,9 @@ export const inboundHandler = createInboundHandler({
 			const isGroup = conv?.jid?.endsWith("@g.us") ?? false;
 
 			_cacheQuestion = lastUserMsg;
-			_useCache = !isGroup && !isMediaSystemNote;
+			_useCache = SUPERVISOR_MODE_ENABLED && !isGroup && !isMediaSystemNote;
 
-			if (!isGroup && conv) {
+			if (SUPERVISOR_MODE_ENABLED && !isGroup && conv) {
 				const identifiedProfile = await getAgentProfile(conv.phone);
 				if (identifiedProfile) {
 					const firstName = deriveFirstNameFromEmail(identifiedProfile.email);
@@ -2684,7 +2693,7 @@ export const inboundHandler = createInboundHandler({
 				}
 			}
 
-			if (!isGroup && !isMediaSystemNote) {
+			if (SUPERVISOR_MODE_ENABLED && !isGroup && !isMediaSystemNote) {
 				// Email registration always works regardless of BigQuery config.
 				// Also check queued messages: if the email arrived in the same debounce batch as
 				// another intent (e.g. user sent email then immediately "eliminar ausencia"), save
@@ -2803,7 +2812,7 @@ export const inboundHandler = createInboundHandler({
 			}
 
 			// UUID case lookup (BigQuery required, works in groups too)
-			const uuidMatch = lastUserMsg.match(UUID_REGEX);
+			const uuidMatch = SUPERVISOR_MODE_ENABLED ? lastUserMsg.match(UUID_REGEX) : null;
 			if (uuidMatch) {
 				const reply = await tryIssueLookupReply(uuidMatch[0]);
 				if (reply) return reply;
@@ -3576,7 +3585,7 @@ export async function startWASocket() {
 			// procesa el grupo), no reacciona a los mensajes entrantes — solo manda sus propios
 			// anuncios (Mi Cobertura). Evita reacciones/respuestas duplicadas en el grupo.
 			const fallasJid = await getFallasGroupJid();
-			if (!msg.key.fromMe && msg.key?.remoteJid === fallasJid && process.env.FALLAS_GROUP_SEND_ONLY !== "true") {
+			if (SUPERVISOR_MODE_ENABLED && !msg.key.fromMe && msg.key?.remoteJid === fallasJid && process.env.FALLAS_GROUP_SEND_ONLY !== "true") {
 				try {
 					await handleFallasGroupMessage(msg);
 				} catch (err) {
